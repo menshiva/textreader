@@ -13,7 +13,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             continue;
         ui.newFrame();
         ui.build();
-        ui.render(app, ImVec4(0.45f, 0.55f, 0.60f, 1.00f));
+        app.bindAndClear(ImVec4(0.45f, 0.55f, 0.60f, 1.00f));
+        ui.render();
         app.present(true);
     }
 

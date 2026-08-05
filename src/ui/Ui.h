@@ -1,7 +1,5 @@
 ﻿#pragma once
 
-#include "imgui.h"
-
 class Win32App;
 
 class Ui {
@@ -9,7 +7,12 @@ public:
     explicit Ui(const Win32App& app);
     ~Ui();
 
+    Ui(const Ui&) = delete;
+    Ui& operator=(const Ui&) = delete;
+    Ui(Ui&&) = delete;
+    Ui& operator=(Ui&&) = delete;
+
     static void newFrame();
     static void build();
-    static void render(Win32App& app, const ImVec4& clearColor);
+    static void render();
 };

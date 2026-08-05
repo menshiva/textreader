@@ -50,16 +50,12 @@ Ui::~Ui() {
 }
 
 void Ui::newFrame() {
-    // Start the Dear ImGui frame
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 }
 
 void Ui::build() {
-    static bool show_demo_window = true;
-    static bool show_another_window = true;
-
     {
         const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(mainViewport->WorkPos);
@@ -83,24 +79,16 @@ void Ui::build() {
         ImGui::End();
     }
 
-    // 3. Show another simple window.
-    if (show_another_window) {
-        ImGui::Begin("Another Window", &show_another_window);   // Pass a pointer to our bool variable (the window will have a closing button that will clear the bool when clicked)
-        ImGui::Text("Hello from another window!");
-        if (ImGui::Button("Close Me"))
-            show_another_window = false;
-        ImGui::End();
+    // TODO: remove
+    {
+        static bool show_demo_window = true;
+        // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
+        if (show_demo_window)
+            ImGui::ShowDemoWindow(&show_demo_window);
     }
-
-    // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
-    if (show_demo_window)
-        ImGui::ShowDemoWindow(&show_demo_window);
 }
 
-void Ui::render(Win32App &app, const ImVec4& clearColor) {
+void Ui::render() {
     ImGui::Render();
-    const float clear_color_with_alpha[4] = { clearColor.x * clearColor.w, clearColor.y * clearColor.w, clearColor.z * clearColor.w, clearColor.w };
-    app.context()->OMSetRenderTargets(1, &app.renderTargetView(), nullptr);
-    app.context()->ClearRenderTargetView(app.renderTargetView(), clear_color_with_alpha);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 }

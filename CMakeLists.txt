@@ -2,7 +2,27 @@ cmake_minimum_required(VERSION 3.28)
 project(TextReader CXX)
 
 set(CMAKE_CXX_STANDARD 20)
-# set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>") # static CRT
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>") # static CRT
 
-file(GLOB_RECURSE SOURCES src/*)
-add_executable(TextReader ${SOURCES})
+# ImGui
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui)
+add_library(IMGUI STATIC)
+target_sources(IMGUI PRIVATE
+        ${IMGUI_DIR}/imgui.cpp
+        ${IMGUI_DIR}/imgui_demo.cpp # TODO
+        ${IMGUI_DIR}/imgui_draw.cpp
+        ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/imgui_widgets.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+)
+target_include_directories(IMGUI PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+target_link_libraries(IMGUI PUBLIC d3d11 dxgi d3dcompiler)
+target_compile_definitions(IMGUI PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+
+# App
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
+add_executable(TextReader WIN32 ${SOURCES})
+target_link_libraries(TextReader PRIVATE IMGUI)
+target_compile_options(TextReader PRIVATE /utf-8 /W4 /permissive- /Zc:__cplusplus /MP)

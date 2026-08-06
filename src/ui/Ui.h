@@ -1,5 +1,8 @@
 ﻿#pragma once
 
+#include <optional>
+#include "../controller/Commands.h"
+
 class Win32App;
 
 class Ui {
@@ -13,6 +16,14 @@ public:
     Ui& operator=(Ui&&) = delete;
 
     static void newFrame();
-    static void build();
+    void build();
     static void render();
+
+    std::optional<Command> takeCommand();
+
+    void setFileOpen(const bool open) { m_FileOpen = open; }
+private:
+    std::optional<Command> m_Command;
+
+    bool m_FileOpen = false;
 };

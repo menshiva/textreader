@@ -56,6 +56,8 @@ void Ui::newFrame() {
 }
 
 void Ui::build() {
+    const ImGuiIO& io = ImGui::GetIO();
+
     {
         const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(mainViewport->WorkPos);
@@ -68,9 +70,26 @@ void Ui::build() {
         );
 
         if (ImGui::BeginMenuBar()) {
-            if (ImGui::BeginMenu("Menu")) {
-                if (ImGui::MenuItem("New")) {}
-                if (ImGui::MenuItem("Open", "Ctrl+O")) {}
+            if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem("Open...", "Ctrl+O"))
+                    m_Command = cmd::OpenFile();
+                if (ImGui::MenuItem("From URL...", "Ctrl+U"))
+                    m_Command = cmd::OpenUrl();
+                if (ImGui::MenuItem("Generate...", "Ctrl+G"))
+                    m_Command = cmd::GenRandom();
+
+                if (m_FileOpen) {
+                    ImGui::Separator();
+
+                    if (ImGui::MenuItem("Save as...", "Ctrl+S"))
+                        m_Command = cmd::SaveAs();
+
+                    ImGui::Separator();
+
+                    if (ImGui::MenuItem("Close"))
+                        m_Command = cmd::Close();
+                }
+
                 ImGui::EndMenu();
             }
             ImGui::EndMenuBar();
@@ -86,9 +105,35 @@ void Ui::build() {
         if (show_demo_window)
             ImGui::ShowDemoWindow(&show_demo_window);
     }
+
+    // 2. Show a simple window that we create ourselves. We use a Begin/End pair to create a named window.
+    {
+        static float f = 0.0f;
+        static int counter = 0;
+
+        ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
+
+        ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
+
+        ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
+
+        if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
+            counter++;
+        ImGui::SameLine();
+        ImGui::Text("counter = %d", counter);
+
+        ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+        ImGui::End();
+    }
 }
 
 void Ui::render() {
     ImGui::Render();
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+}
+
+std::optional<Command> Ui::takeCommand() {
+    if (!m_Command.has_value())
+        return std::nullopt;
+    return std::exchange(m_Command, std::nullopt);
 }

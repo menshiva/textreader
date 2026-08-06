@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include <d3d11.h>
+#include <optional>
+#include <filesystem>
 #include "imgui.h"
 
 class Win32App {
@@ -20,6 +22,11 @@ public:
 
     void queueResize(UINT w, UINT h);
 
+    std::optional<std::filesystem::path> showTextFileDialog(bool open) const;
+
+    void setWindowTitle(const wchar_t* title) const;
+    void resetWindowTitle() const;
+
     bool isInitialized() const { return m_Initialized; }
     bool shouldClose() const { return m_ShouldClose; }
     float getDpiScale() const { return m_DpiScale; }
@@ -32,6 +39,7 @@ private:
     void CreateRenderTarget();
     void CleanupRenderTarget();
 
+    const wchar_t* m_InitialWindowName;
     float m_DpiScale = 1.0f;
 
     LPCWSTR m_lpClassName = nullptr;

@@ -1,5 +1,7 @@
 ﻿#include "Win32App.h"
 #include "imgui_impl_win32.h"
+#include <shobjidl.h>
+#include <wrl/client.h>
 
 // Forward declare message handler from imgui_impl_win32.cpp
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -10,30 +12,33 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 // - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
 // Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
 static LRESULT WINAPI WndProc(const HWND hWnd, const UINT msg, const WPARAM wParam, const LPARAM lParam) {
-    if (msg == WM_DESTROY) {
-        PostQuitMessage(0);
-        return 0;
-    }
-
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
         return true;
 
     auto* self = reinterpret_cast<Win32App*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
     switch (msg) {
-        case WM_SIZE:
+        case WM_DESTROY: {
+            PostQuitMessage(0);
+            return 0;
+        }
+        case WM_SIZE: {
             if (wParam != SIZE_MINIMIZED && self)
                 self->queueResize(LOWORD(lParam), HIWORD(lParam));
             return 0;
-        case WM_SYSCOMMAND:
+        }
+        case WM_SYSCOMMAND: {
             if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
                 return 0;
             break;
+        }
     }
 
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
 Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH) {
+    m_InitialWindowName = windowName;
+
     // Make process DPI aware and obtain main monitor scale
     ImGui_ImplWin32_EnableDpiAwareness();
     m_DpiScale = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
@@ -48,7 +53,7 @@ Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH
     };
     RegisterClassExW(&wc);
     m_Hwnd = ::CreateWindowW(
-        m_lpClassName, windowName, WS_OVERLAPPEDWINDOW, 100, 100,
+        m_lpClassName, m_InitialWindowName, WS_OVERLAPPEDWINDOW, 100, 100,
         static_cast<int>(initW * m_DpiScale), static_cast<int>(initH * m_DpiScale), nullptr, nullptr, m_hInstance, nullptr
     );
     if (!m_Hwnd)
@@ -77,6 +82,7 @@ void Win32App::pollMessages() {
     // Poll and handle messages (inputs, window resize, etc.)
     // See the WndProc() function above for our to dispatch events to the Win32 backend.
     MSG msg;
+    // TODO: maybe use blocking GetMessage???
     while (::PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE)) {
         TranslateMessage(&msg);
         ::DispatchMessage(&msg);
@@ -123,6 +129,58 @@ void Win32App::queueResize(const UINT w, const UINT h) {
     m_ResizeHeight = h;
 }
 
+std::optional<std::filesystem::path> Win32App::showTextFileDialog(const bool open) const {
+    constexpr static COMDLG_FILTERSPEC kFilters[] = {
+        {L"Text files (*.txt)", L"*.txt"},
+    };
+
+    Microsoft::WRL::ComPtr<IFileDialog> dlg;
+    if (FAILED(CoCreateInstance(open ? CLSID_FileOpenDialog : CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))))
+        return std::nullopt;
+
+    if (open)
+        (void) dlg->SetTitle(L"Open text file");
+    else
+        (void) dlg->SetTitle(L"Save as");
+    (void) dlg->SetFileTypes(ARRAYSIZE(kFilters), kFilters);
+    (void) dlg->SetFileTypeIndex(1);
+    if (!open)
+        (void) dlg->SetDefaultExtension(L"txt");
+
+    DWORD flags = 0;
+    if (SUCCEEDED(dlg->GetOptions(&flags))) {
+        if (open)
+            flags = flags | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST;
+        else
+            flags = flags | FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT;
+    }
+    (void) dlg->SetOptions(flags);
+
+    if (FAILED(dlg->Show(m_Hwnd))) // cancelled
+        return std::nullopt;
+
+    Microsoft::WRL::ComPtr<IShellItem> item;
+    if (FAILED(dlg->GetResult(&item)))
+        return std::nullopt;
+
+    PWSTR raw = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &raw)))
+        return std::nullopt;
+
+    std::filesystem::path p(raw);
+    CoTaskMemFree(raw);
+
+    return p;
+}
+
+void Win32App::setWindowTitle(const wchar_t *title) const {
+    SetWindowTextW(m_Hwnd, title);
+}
+
+void Win32App::resetWindowTitle() const {
+    setWindowTitle(m_InitialWindowName);
+}
+
 bool Win32App::CreateDeviceD3D() {
     // Setup swap chain
     DXGI_SWAP_CHAIN_DESC sd;
@@ -131,8 +189,8 @@ bool Win32App::CreateDeviceD3D() {
     sd.BufferDesc.Width = 0;
     sd.BufferDesc.Height = 0;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    sd.BufferDesc.RefreshRate.Numerator = 60;
-    sd.BufferDesc.RefreshRate.Denominator = 1;
+    // sd.BufferDesc.RefreshRate.Numerator = 60;
+    // sd.BufferDesc.RefreshRate.Denominator = 1;
     sd.Flags = 0;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.OutputWindow = m_Hwnd;
@@ -165,18 +223,32 @@ bool Win32App::CreateDeviceD3D() {
 
 void Win32App::CleanupDeviceD3D() {
     CleanupRenderTarget();
-    if (m_pSwapChain) { m_pSwapChain->Release(); m_pSwapChain = nullptr; }
-    if (m_pd3dDeviceContext) { m_pd3dDeviceContext->Release(); m_pd3dDeviceContext = nullptr; }
-    if (m_pd3dDevice) { m_pd3dDevice->Release(); m_pd3dDevice = nullptr; }
+    if (m_pSwapChain) {
+        m_pSwapChain->Release();
+        m_pSwapChain = nullptr;
+    }
+    if (m_pd3dDeviceContext) {
+        m_pd3dDeviceContext->Release();
+        m_pd3dDeviceContext = nullptr;
+    }
+    if (m_pd3dDevice) {
+        m_pd3dDevice->Release();
+        m_pd3dDevice = nullptr;
+    }
 }
 
 void Win32App::CreateRenderTarget() {
     ID3D11Texture2D* pBackBuffer;
-    (void) m_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
-    (void) m_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &m_mainRenderTargetView);
+    const auto bufRes = m_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    assert(SUCCEEDED(bufRes));
+    const auto createRtvRes = m_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &m_mainRenderTargetView);
+    assert(SUCCEEDED(createRtvRes));
     pBackBuffer->Release();
 }
 
 void Win32App::CleanupRenderTarget() {
-    if (m_mainRenderTargetView) { m_mainRenderTargetView->Release(); m_mainRenderTargetView = nullptr; }
+    if (m_mainRenderTargetView) {
+        m_mainRenderTargetView->Release();
+        m_mainRenderTargetView = nullptr;
+    }
 }

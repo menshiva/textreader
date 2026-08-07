@@ -29,6 +29,16 @@ public:
 
     bool isInitialized() const { return m_Initialized; }
     bool shouldClose() const { return m_ShouldClose; }
+
+    struct TmpFileDescriptor {
+        ~TmpFileDescriptor();
+        FILE* file = nullptr;
+    };
+    std::unique_ptr<TmpFileDescriptor> getTmpTextFileWriteDescriptor() const;
+    void exchangeTmpTextFiles() const;
+    void removeTmpTextFiles(bool removeR, bool removeW) const;
+    const std::filesystem::path& getTmpTextFileReadPath() const { return m_TmpTextFileReadPath; }
+
     float getDpiScale() const { return m_DpiScale; }
     HWND hwnd() const { return m_Hwnd; }
     ID3D11Device* device() const { return m_pd3dDevice; }
@@ -48,6 +58,9 @@ private:
 
     bool m_Initialized = false;
     bool m_ShouldClose = false;
+
+    std::filesystem::path m_TmpTextFileReadPath;
+    std::filesystem::path m_TmpTextFileWritePath;
 
     ID3D11Device* m_pd3dDevice = nullptr;
     ID3D11DeviceContext* m_pd3dDeviceContext = nullptr;

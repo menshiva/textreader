@@ -16,6 +16,7 @@ static LRESULT WINAPI WndProc(const HWND hWnd, const UINT msg, const WPARAM wPar
         return true;
 
     auto* self = reinterpret_cast<Win32App*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+    // ReSharper disable once CppDefaultCaseNotHandledInSwitchStatement
     switch (msg) {
         case WM_DESTROY: {
             PostQuitMessage(0);
@@ -67,6 +68,15 @@ Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH
     // Show the window
     ShowWindow(m_Hwnd, SW_SHOWDEFAULT);
     UpdateWindow(m_Hwnd);
+
+    {
+        wchar_t dir[MAX_PATH + 1];
+        const DWORD n = GetTempPathW(MAX_PATH + 1, dir); // always has '\' at the end
+        if (n != 0 && n <= MAX_PATH) {
+            m_TmpTextFileReadPath = std::filesystem::path(dir) / L"TextReader (tmp)";
+            m_TmpTextFileWritePath = std::filesystem::path(dir) / L"TextReader (tmp, write).txt";
+        }
+    }
 
     m_Initialized = true;
 }
@@ -179,6 +189,34 @@ void Win32App::setWindowTitle(const wchar_t *title) const {
 
 void Win32App::resetWindowTitle() const {
     setWindowTitle(m_InitialWindowName);
+}
+
+Win32App::TmpFileDescriptor::~TmpFileDescriptor() {
+    if (file)
+        fclose(file);
+}
+
+std::unique_ptr<Win32App::TmpFileDescriptor> Win32App::getTmpTextFileWriteDescriptor() const {
+    if (m_TmpTextFileWritePath.empty())
+        return nullptr;
+
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, m_TmpTextFileWritePath.c_str(), L"wb") == 0 && f)
+        return std::make_unique<TmpFileDescriptor>(f);
+
+    return nullptr;
+}
+
+void Win32App::exchangeTmpTextFiles() const {
+    std::filesystem::remove(m_TmpTextFileReadPath);
+    std::filesystem::rename(m_TmpTextFileWritePath, m_TmpTextFileReadPath);
+}
+
+void Win32App::removeTmpTextFiles(const bool removeR, const bool removeW) const {
+    if (removeR)
+        std::filesystem::remove(m_TmpTextFileReadPath);
+    if (removeW)
+        std::filesystem::remove(m_TmpTextFileWritePath);
 }
 
 bool Win32App::CreateDeviceD3D() {

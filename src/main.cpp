@@ -9,6 +9,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     Ui ui(app);
     Controller controller(app, ui);
 
+// #ifdef _DEBUG
+    AllocConsole();
+    FILE* dummy;
+    freopen_s(&dummy, "CONOUT$", "w", stdout);
+// #endif
+
     while (!app.shouldClose()) {
         app.pollMessages();
 
@@ -22,6 +28,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
         if (const auto cmd = ui.takeCommand())
             controller.process(*cmd);
+        controller.tick();
     }
 
     return 0;

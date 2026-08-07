@@ -25,7 +25,6 @@ void LineIndexer::build() {
             const auto nl = static_cast<const char*>(memchr(p, '\n', end - p));
             if (!nl)
                 break;
-            // ReSharper disable once CppTooWideScopeInitStatement
             const uint64_t nextStart = pos + (nl - chunk.data()) + 1;
             if (nextStart < fileSize)
                 m_LineOffsets.push_back(nextStart);

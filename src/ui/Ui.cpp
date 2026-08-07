@@ -76,7 +76,7 @@ void Ui::build() {
                 if (ImGui::MenuItem("From URL...", "Ctrl+U"))
                     m_Command = cmd::OpenUrl();
                 if (ImGui::MenuItem("Generate...", "Ctrl+G"))
-                    m_Command = cmd::GenRandom();
+                    m_GenTxtState = GenTxtState::Idle;
 
                 if (m_FileOpen) {
                     ImGui::Separator();
@@ -95,6 +95,99 @@ void Ui::build() {
             ImGui::EndMenuBar();
         }
 
+        {
+            ImGui::SetNextWindowPos(mainViewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+
+            if (!m_ErrorMsg.empty()) {
+                if (!ImGui::IsPopupOpen("Error"))
+                    ImGui::OpenPopup("Error");
+            }
+            else if (m_GenTxtState != GenTxtState::None) {
+                if (!ImGui::IsPopupOpen("Generate txt")) {
+                    setGenTxtProgressTS(0.0f);
+                    ImGui::OpenPopup("Generate txt");
+                }
+            }
+        }
+
+        if (ImGui::BeginPopupModal(
+            "Error", nullptr,
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
+        )) {
+            ImGui::TextUnformatted(m_ErrorMsg.c_str(), m_ErrorMsg.c_str() + m_ErrorMsg.size());
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
+                m_ErrorMsg.clear();
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SetItemDefaultFocus();
+            ImGui::EndPopup();
+        }
+
+        if (ImGui::BeginPopupModal(
+            "Generate txt", nullptr,
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
+        )) {
+            static int genTxtValue = 1;
+            ImGui::InputInt("##GenTxtInput", &genTxtValue, 0, 0);
+
+            ImGui::SameLine();
+
+            constexpr static const char* genTxtComboItems[] = { "Kb", "Mb", "Gb", "Lines" };
+            static int genTxtItemIdx = 1;
+            if (ImGui::BeginCombo("##GenTxtCombo", genTxtComboItems[genTxtItemIdx], ImGuiComboFlags_WidthFitPreview)) {
+                for (int n = 0; n < IM_COUNTOF(genTxtComboItems); ++n) {
+                    const bool is_selected = genTxtItemIdx == n;
+                    if (ImGui::Selectable(genTxtComboItems[n], is_selected))
+                        genTxtItemIdx = n;
+                    if (is_selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            if (m_GenTxtState != GenTxtState::None) {
+                if (m_GenTxtState == GenTxtState::Idle) {
+                    setGenTxtProgressTS(0.0f);
+
+                    const bool genButtonDisabled = genTxtValue < 1;
+                    if (genButtonDisabled)
+                        ImGui::BeginDisabled();
+                    if (ImGui::Button("Generate", ImVec2(-FLT_MIN, 0.0f)))
+                        m_Command = cmd::GenRandom(static_cast<uint32_t>(genTxtValue), static_cast<cmd::GenRandom::Type>(genTxtItemIdx));
+                    if (genButtonDisabled)
+                        ImGui::EndDisabled();
+                }
+                else {
+                    ImGui::ProgressBar(m_GenTxtProgress.load(std::memory_order_relaxed));
+                }
+
+                if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0))) {
+                    if (m_GenTxtState == GenTxtState::Running) {
+                        m_Command = cmd::CancelGenRandom();
+                    }
+                    else {
+                        m_GenTxtState = GenTxtState::None;
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+            }
+            else {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+
         ImGui::End();
     }
 
@@ -106,6 +199,7 @@ void Ui::build() {
             ImGui::ShowDemoWindow(&show_demo_window);
     }
 
+    // TODO: remove
     // 2. Show a simple window that we create ourselves. We use a Begin/End pair to create a named window.
     {
         static float f = 0.0f;
@@ -136,4 +230,8 @@ std::optional<Command> Ui::takeCommand() {
     if (!m_Command.has_value())
         return std::nullopt;
     return std::exchange(m_Command, std::nullopt);
+}
+
+void Ui::setGenTxtProgressTS(const float val) {
+    m_GenTxtProgress.store(val, std::memory_order_relaxed);
 }

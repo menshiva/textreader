@@ -20,10 +20,12 @@ public:
     // returns a view to the [offset, min(offset+len, fileSize)). pointer is valid until the next call
     std::span<const char> view(uint64_t offset, size_t len);
 
+    const std::filesystem::path& getPath() const { return m_FilePath; }
     uint64_t getSize() const { return m_Size; }
 private:
     void unmapView();
 
+    std::filesystem::path m_FilePath;
     HANDLE m_File = INVALID_HANDLE_VALUE;
     uint64_t m_Size = 0;
     HANDLE m_Mapping = nullptr;

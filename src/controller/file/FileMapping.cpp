@@ -14,29 +14,35 @@ FileMapping::~FileMapping() {
 }
 
 bool FileMapping::open(const std::filesystem::path &path) {
-    close();
-
-    m_File = CreateFileW(
+    const auto newFile = CreateFileW(
         path.c_str(), GENERIC_READ, FILE_SHARE_READ /*| FILE_SHARE_WRITE*/,
         nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr
     );
-    if (m_File == INVALID_HANDLE_VALUE)
+    if (newFile == INVALID_HANDLE_VALUE)
         return false;
 
     LARGE_INTEGER sz{};
-    if (!GetFileSizeEx(m_File, &sz) || sz.QuadPart <= 0) {
+    if (!GetFileSizeEx(newFile, &sz) || sz.QuadPart <= 0) {
         close();
         return false;
     }
-    m_Size = static_cast<uint64_t>(sz.QuadPart);
+    const auto newSize = static_cast<uint64_t>(sz.QuadPart);
 
-    m_Mapping = CreateFileMappingW( // returns NULL instead of INVALID_HANDLE_VALUE!!!!!
-        m_File, nullptr, PAGE_READONLY, 0, 0, nullptr
+    const auto newMapping = CreateFileMappingW( // returns NULL instead of INVALID_HANDLE_VALUE!!!!!
+        newFile, nullptr, PAGE_READONLY, 0, 0, nullptr
     );
-    if (!m_Mapping) {
-        close();
+    if (!newMapping) {
+        CloseHandle(newFile);
         return false;
     }
+
+    close();
+
+    m_FilePath = path;
+    m_File = newFile;
+    m_Size = newSize;
+    m_Mapping = newMapping;
+
     return true;
 }
 
@@ -53,6 +59,7 @@ void FileMapping::close() {
         CloseHandle(m_File);
         m_File = INVALID_HANDLE_VALUE;
     }
+    m_FilePath.clear();
 }
 
 std::span<const char> FileMapping::view(const uint64_t offset, size_t len) {

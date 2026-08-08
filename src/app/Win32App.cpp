@@ -37,86 +37,83 @@ static LRESULT WINAPI WndProc(const HWND hWnd, const UINT msg, const WPARAM wPar
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH) {
-    m_InitialWindowName = windowName;
+Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH, bool& outInitialized) {
+    outInitialized = false;
+    m_WindowData.initialWindowName = windowName;
 
     // Make process DPI aware and obtain main monitor scale
     ImGui_ImplWin32_EnableDpiAwareness();
-    m_DpiScale = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
+    m_WindowData.dpiScale = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
 
     // Create application window
-    m_lpClassName = L"TextReaderWindowClass";
-    m_hInstance = GetModuleHandle(nullptr);
+    m_WindowData.lpClassName = L"TextReaderWindowClass";
+    m_WindowData.hInstance = GetModuleHandle(nullptr);
     const WNDCLASSEXW wc = {
-        sizeof(WNDCLASSEXW), 0, WndProc, 0L, 0L, m_hInstance,
-        nullptr, nullptr, nullptr, nullptr, m_lpClassName,
+        sizeof(WNDCLASSEXW), 0, WndProc, 0L, 0L, m_WindowData.hInstance,
+        nullptr, nullptr, nullptr, nullptr, m_WindowData.lpClassName,
         nullptr
     };
     RegisterClassExW(&wc);
-    m_Hwnd = ::CreateWindowW(
-        m_lpClassName, m_InitialWindowName, WS_OVERLAPPEDWINDOW, 100, 100,
-        static_cast<int>(initW * m_DpiScale), static_cast<int>(initH * m_DpiScale), nullptr, nullptr, m_hInstance, nullptr
+    m_WindowData.hwnd = ::CreateWindowW(
+        m_WindowData.lpClassName, m_WindowData.initialWindowName, WS_OVERLAPPEDWINDOW, 100, 100,
+        static_cast<int>(initW * m_WindowData.dpiScale), static_cast<int>(initH * m_WindowData.dpiScale), nullptr, nullptr, m_WindowData.hInstance, nullptr
     );
-    if (!m_Hwnd)
+    if (!m_WindowData.hwnd)
         return;
-    SetWindowLongPtrW(m_Hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    SetWindowLongPtrW(m_WindowData.hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
     // Initialize Direct3D
     if (!CreateDeviceD3D())
         return;
 
-    // Show the window
-    ShowWindow(m_Hwnd, SW_SHOWDEFAULT);
-    UpdateWindow(m_Hwnd);
+    ShowWindow(m_WindowData.hwnd, SW_SHOWDEFAULT);
+    UpdateWindow(m_WindowData.hwnd);
 
     {
         wchar_t dir[MAX_PATH + 1];
         const DWORD n = GetTempPathW(MAX_PATH + 1, dir); // always has '\' at the end
-        if (n != 0 && n <= MAX_PATH) {
-            m_TmpTextFileReadPath = std::filesystem::path(dir) / L"TextReader (tmp)";
-            m_TmpTextFileWritePath = std::filesystem::path(dir) / L"TextReader (tmp, write).txt";
-        }
+        if (n != 0 && n <= MAX_PATH)
+            m_TmpTextFilePath = std::filesystem::path(dir) / L"TextReader (tmp)";
     }
 
-    m_Initialized = true;
+    outInitialized = true;
 }
 
 Win32App::~Win32App() {
     CleanupDeviceD3D();
-    if (m_Hwnd)
-        DestroyWindow(m_Hwnd);
-    UnregisterClassW(m_lpClassName, m_hInstance);
+    if (m_WindowData.hwnd)
+        DestroyWindow(m_WindowData.hwnd);
+    UnregisterClassW(m_WindowData.lpClassName, m_WindowData.hInstance);
 }
 
 void Win32App::pollMessages() {
     // Poll and handle messages (inputs, window resize, etc.)
     // See the WndProc() function above for our to dispatch events to the Win32 backend.
     MSG msg;
-    // TODO: maybe use blocking GetMessage???
     while (::PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE)) {
         TranslateMessage(&msg);
         ::DispatchMessage(&msg);
         if (msg.message == WM_QUIT)
-            m_ShouldClose = true;
+            m_WindowData.shouldClose = true;
     }
 }
 
 bool Win32App::beginFrame() {
-    if (m_ShouldClose)
+    if (m_WindowData.shouldClose)
         return false;
 
     // Handle window being minimized or screen locked
-    if (m_SwapChainOccluded && m_pSwapChain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED) {
+    if (m_D3D11Data.swapChainOccluded && m_D3D11Data.swapChain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED) {
         Sleep(10);
         return false;
     }
-    m_SwapChainOccluded = false;
+    m_D3D11Data.swapChainOccluded = false;
 
     // Handle window resize (we don't resize directly in the WM_SIZE handler)
-    if (m_ResizeWidth != 0 && m_ResizeHeight != 0) {
+    if (m_D3D11Data.resizeWidth != 0 && m_D3D11Data.resizeHeight != 0) {
         CleanupRenderTarget();
-        (void) m_pSwapChain->ResizeBuffers(0, m_ResizeWidth, m_ResizeHeight, DXGI_FORMAT_UNKNOWN, 0);
-        m_ResizeWidth = m_ResizeHeight = 0;
+        (void) m_D3D11Data.swapChain->ResizeBuffers(0, m_D3D11Data.resizeWidth, m_D3D11Data.resizeHeight, DXGI_FORMAT_UNKNOWN, 0);
+        m_D3D11Data.resizeWidth = m_D3D11Data.resizeHeight = 0;
         CreateRenderTarget();
     }
 
@@ -125,23 +122,28 @@ bool Win32App::beginFrame() {
 
 void Win32App::bindAndClear(const ImVec4& clearColor) const {
     const float clearColorWithAlpha[4] = { clearColor.x * clearColor.w, clearColor.y * clearColor.w, clearColor.z * clearColor.w, clearColor.w };
-    m_pd3dDeviceContext->OMSetRenderTargets(1, &m_mainRenderTargetView, nullptr);
-    m_pd3dDeviceContext->ClearRenderTargetView(m_mainRenderTargetView, clearColorWithAlpha);
+    m_D3D11Data.context->OMSetRenderTargets(1, &m_D3D11Data.renderTargetView, nullptr);
+    m_D3D11Data.context->ClearRenderTargetView(m_D3D11Data.renderTargetView, clearColorWithAlpha);
 }
 
 void Win32App::present(const bool vsync) {
-    const HRESULT hr = m_pSwapChain->Present(vsync, 0);
-    m_SwapChainOccluded = hr == DXGI_STATUS_OCCLUDED;
+    const HRESULT hr = m_D3D11Data.swapChain->Present(vsync, 0);
+    m_D3D11Data.swapChainOccluded = hr == DXGI_STATUS_OCCLUDED;
 }
 
 void Win32App::queueResize(const UINT w, const UINT h) {
-    m_ResizeWidth = w;
-    m_ResizeHeight = h;
+    m_D3D11Data.resizeWidth = w;
+    m_D3D11Data.resizeHeight = h;
+}
+
+void Win32App::setWindowTitle(const std::optional<const wchar_t*>& titleOpt) const {
+    SetWindowTextW(m_WindowData.hwnd, titleOpt.value_or(m_WindowData.initialWindowName));
 }
 
 std::optional<std::filesystem::path> Win32App::showTextFileDialog(const bool open) const {
     constexpr static COMDLG_FILTERSPEC kFilters[] = {
         {L"Text files (*.txt)", L"*.txt"},
+        // {L"All files (*.*)", L"*.*"}
     };
 
     Microsoft::WRL::ComPtr<IFileDialog> dlg;
@@ -166,7 +168,7 @@ std::optional<std::filesystem::path> Win32App::showTextFileDialog(const bool ope
     }
     (void) dlg->SetOptions(flags);
 
-    if (FAILED(dlg->Show(m_Hwnd))) // cancelled
+    if (FAILED(dlg->Show(m_WindowData.hwnd))) // cancelled
         return std::nullopt;
 
     Microsoft::WRL::ComPtr<IShellItem> item;
@@ -183,42 +185,6 @@ std::optional<std::filesystem::path> Win32App::showTextFileDialog(const bool ope
     return p;
 }
 
-void Win32App::setWindowTitle(const wchar_t *title) const {
-    SetWindowTextW(m_Hwnd, title);
-}
-
-void Win32App::resetWindowTitle() const {
-    setWindowTitle(m_InitialWindowName);
-}
-
-Win32App::TmpFileDescriptor::~TmpFileDescriptor() {
-    if (file)
-        fclose(file);
-}
-
-std::unique_ptr<Win32App::TmpFileDescriptor> Win32App::getTmpTextFileWriteDescriptor() const {
-    if (m_TmpTextFileWritePath.empty())
-        return nullptr;
-
-    FILE* f = nullptr;
-    if (_wfopen_s(&f, m_TmpTextFileWritePath.c_str(), L"wb") == 0 && f)
-        return std::make_unique<TmpFileDescriptor>(f);
-
-    return nullptr;
-}
-
-void Win32App::exchangeTmpTextFiles() const {
-    std::filesystem::remove(m_TmpTextFileReadPath);
-    std::filesystem::rename(m_TmpTextFileWritePath, m_TmpTextFileReadPath);
-}
-
-void Win32App::removeTmpTextFiles(const bool removeR, const bool removeW) const {
-    if (removeR)
-        std::filesystem::remove(m_TmpTextFileReadPath);
-    if (removeW)
-        std::filesystem::remove(m_TmpTextFileWritePath);
-}
-
 bool Win32App::CreateDeviceD3D() {
     // Setup swap chain
     DXGI_SWAP_CHAIN_DESC sd;
@@ -231,7 +197,7 @@ bool Win32App::CreateDeviceD3D() {
     // sd.BufferDesc.RefreshRate.Denominator = 1;
     sd.Flags = 0;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.OutputWindow = m_Hwnd;
+    sd.OutputWindow = m_WindowData.hwnd;
     sd.SampleDesc.Count = 1;
     sd.SampleDesc.Quality = 0;
     sd.Windowed = TRUE;
@@ -243,13 +209,13 @@ bool Win32App::CreateDeviceD3D() {
     constexpr D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
     HRESULT res = D3D11CreateDeviceAndSwapChain(
         nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags, featureLevelArray, 2,
-        D3D11_SDK_VERSION, &sd, &m_pSwapChain, &m_pd3dDevice, &featureLevel, &m_pd3dDeviceContext
+        D3D11_SDK_VERSION, &sd, &m_D3D11Data.swapChain, &m_D3D11Data.device, &featureLevel, &m_D3D11Data.context
     );
     if (res == DXGI_ERROR_UNSUPPORTED) {
         // Try high-performance WARP software driver if hardware is not available.
         res = D3D11CreateDeviceAndSwapChain(
             nullptr, D3D_DRIVER_TYPE_WARP, nullptr, createDeviceFlags, featureLevelArray, 2,
-            D3D11_SDK_VERSION, &sd, &m_pSwapChain, &m_pd3dDevice, &featureLevel, &m_pd3dDeviceContext
+            D3D11_SDK_VERSION, &sd, &m_D3D11Data.swapChain, &m_D3D11Data.device, &featureLevel, &m_D3D11Data.context
         );
     }
     if (res != S_OK)
@@ -261,32 +227,32 @@ bool Win32App::CreateDeviceD3D() {
 
 void Win32App::CleanupDeviceD3D() {
     CleanupRenderTarget();
-    if (m_pSwapChain) {
-        m_pSwapChain->Release();
-        m_pSwapChain = nullptr;
+    if (m_D3D11Data.swapChain) {
+        m_D3D11Data.swapChain->Release();
+        m_D3D11Data.swapChain = nullptr;
     }
-    if (m_pd3dDeviceContext) {
-        m_pd3dDeviceContext->Release();
-        m_pd3dDeviceContext = nullptr;
+    if (m_D3D11Data.context) {
+        m_D3D11Data.context->Release();
+        m_D3D11Data.context = nullptr;
     }
-    if (m_pd3dDevice) {
-        m_pd3dDevice->Release();
-        m_pd3dDevice = nullptr;
+    if (m_D3D11Data.device) {
+        m_D3D11Data.device->Release();
+        m_D3D11Data.device = nullptr;
     }
 }
 
 void Win32App::CreateRenderTarget() {
     ID3D11Texture2D* pBackBuffer;
-    const auto bufRes = m_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    const auto bufRes = m_D3D11Data.swapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
     assert(SUCCEEDED(bufRes));
-    const auto createRtvRes = m_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &m_mainRenderTargetView);
+    const auto createRtvRes = m_D3D11Data.device->CreateRenderTargetView(pBackBuffer, nullptr, &m_D3D11Data.renderTargetView);
     assert(SUCCEEDED(createRtvRes));
     pBackBuffer->Release();
 }
 
 void Win32App::CleanupRenderTarget() {
-    if (m_mainRenderTargetView) {
-        m_mainRenderTargetView->Release();
-        m_mainRenderTargetView = nullptr;
+    if (m_D3D11Data.renderTargetView) {
+        m_D3D11Data.renderTargetView->Release();
+        m_D3D11Data.renderTargetView = nullptr;
     }
 }

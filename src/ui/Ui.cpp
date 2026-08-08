@@ -1,6 +1,7 @@
 ﻿#include "Ui.h"
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
+#include "imgui_internal.h"
 #include "../app/Win32App.h"
 
 Ui::Ui(const Win32App& app) {
@@ -69,25 +70,28 @@ void Ui::build() {
             | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBringToFrontOnFocus
         );
 
+        bool openGenText = false;
+
+        // menu bar
         if (ImGui::BeginMenuBar()) {
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("Open...", "Ctrl+O"))
-                    m_Command = cmd::OpenFile();
+                    sendAndExecCommand(cmd::OpenFile());
                 if (ImGui::MenuItem("From URL...", "Ctrl+U"))
-                    m_Command = cmd::OpenUrl();
+                    sendAndExecCommand(cmd::OpenUrl());
                 if (ImGui::MenuItem("Generate...", "Ctrl+G"))
-                    m_GenTxtState = GenTxtState::Idle;
+                    openGenText = true;
 
                 if (m_FileOpen) {
                     ImGui::Separator();
 
                     if (ImGui::MenuItem("Save as...", "Ctrl+S"))
-                        m_Command = cmd::SaveAs();
+                        sendAndExecCommand(cmd::SaveAs());
 
                     ImGui::Separator();
 
                     if (ImGui::MenuItem("Close"))
-                        m_Command = cmd::Close();
+                        sendAndExecCommand(cmd::Close());
                 }
 
                 ImGui::EndMenu();
@@ -95,97 +99,118 @@ void Ui::build() {
             ImGui::EndMenuBar();
         }
 
+        // modal opening
         {
-            ImGui::SetNextWindowPos(mainViewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            if (m_ProgressPopupData.name) {
+                if (!ImGui::IsPopupOpen("##progress")) {
+                    ImGui::OpenPopup("##progress");
+                }
+            }
+            else if (openGenText) {
+                ImGui::OpenPopup("Generate txt");
+            }
 
             if (!m_ErrorMsg.empty()) {
                 if (!ImGui::IsPopupOpen("Error"))
                     ImGui::OpenPopup("Error");
             }
-            else if (m_GenTxtState != GenTxtState::None) {
-                if (!ImGui::IsPopupOpen("Generate txt")) {
-                    setGenTxtProgressTS(0.0f);
-                    ImGui::OpenPopup("Generate txt");
-                }
-            }
         }
 
-        if (ImGui::BeginPopupModal(
-            "Error", nullptr,
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
-        )) {
-            ImGui::TextUnformatted(m_ErrorMsg.c_str(), m_ErrorMsg.c_str() + m_ErrorMsg.size());
+        // modals
+        {
+            ImGui::SetNextWindowPos(mainViewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            if (ImGui::BeginPopupModal(
+                "Generate txt", nullptr,
+                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
+            )) {
+                static int genTxtValue = 1;
+                ImGui::InputInt("##GenTxtInput", &genTxtValue, 0, 0);
 
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
+                ImGui::SameLine();
 
-            if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
-                m_ErrorMsg.clear();
-                ImGui::CloseCurrentPopup();
+                constexpr static const char* genTxtComboItems[] = { "Kb", "Mb", "Gb", "Lines" };
+                static int genTxtItemIdx = 1;
+                if (ImGui::BeginCombo("##GenTxtCombo", genTxtComboItems[genTxtItemIdx], ImGuiComboFlags_WidthFitPreview)) {
+                    for (int n = 0; n < IM_COUNTOF(genTxtComboItems); ++n) {
+                        const bool is_selected = genTxtItemIdx == n;
+                        if (ImGui::Selectable(genTxtComboItems[n], is_selected))
+                            genTxtItemIdx = n;
+                        if (is_selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                const bool genButtonDisabled = genTxtValue < 1;
+                if (genButtonDisabled)
+                    ImGui::BeginDisabled();
+                if (ImGui::Button("Generate", ImVec2(-FLT_MIN, 0.0f))) {
+                    if (sendAndExecCommand(cmd::GenRandom(static_cast<uint32_t>(genTxtValue), static_cast<cmd::GenRandom::Type>(genTxtItemIdx))))
+                        ImGui::CloseCurrentPopup();
+                }
+                if (genButtonDisabled)
+                    ImGui::EndDisabled();
+
+                if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0)))
+                    ImGui::CloseCurrentPopup();
+
+                ImGui::EndPopup();
             }
 
-            ImGui::SetItemDefaultFocus();
-            ImGui::EndPopup();
-        }
-
-        if (ImGui::BeginPopupModal(
-            "Generate txt", nullptr,
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
-        )) {
-            static int genTxtValue = 1;
-            ImGui::InputInt("##GenTxtInput", &genTxtValue, 0, 0);
-
-            ImGui::SameLine();
-
-            constexpr static const char* genTxtComboItems[] = { "Kb", "Mb", "Gb", "Lines" };
-            static int genTxtItemIdx = 1;
-            if (ImGui::BeginCombo("##GenTxtCombo", genTxtComboItems[genTxtItemIdx], ImGuiComboFlags_WidthFitPreview)) {
-                for (int n = 0; n < IM_COUNTOF(genTxtComboItems); ++n) {
-                    const bool is_selected = genTxtItemIdx == n;
-                    if (ImGui::Selectable(genTxtComboItems[n], is_selected))
-                        genTxtItemIdx = n;
-                    if (is_selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            if (m_GenTxtState != GenTxtState::None) {
-                if (m_GenTxtState == GenTxtState::Idle) {
-                    setGenTxtProgressTS(0.0f);
-
-                    const bool genButtonDisabled = genTxtValue < 1;
-                    if (genButtonDisabled)
-                        ImGui::BeginDisabled();
-                    if (ImGui::Button("Generate", ImVec2(-FLT_MIN, 0.0f)))
-                        m_Command = cmd::GenRandom(static_cast<uint32_t>(genTxtValue), static_cast<cmd::GenRandom::Type>(genTxtItemIdx));
-                    if (genButtonDisabled)
-                        ImGui::EndDisabled();
-                }
-                else {
-                    ImGui::ProgressBar(m_GenTxtProgress.load(std::memory_order_relaxed));
-                }
-
-                if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0))) {
-                    if (m_GenTxtState == GenTxtState::Running) {
-                        m_Command = cmd::CancelGenRandom();
+            ImGui::SetNextWindowPos(mainViewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            if (ImGui::BeginPopupModal(
+                "##progress", nullptr,
+                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
+            )) {
+                if (m_ProgressPopupData.name) {
+                    float fraction;
+                    char buf[64];
+                    if (m_ProgressPopupData.infinite) {
+                        fraction = -FLT_MIN;
+                        ImFormatString(buf, IM_COUNTOF(buf), "%s...", m_ProgressPopupData.name);
                     }
                     else {
-                        m_GenTxtState = GenTxtState::None;
-                        ImGui::CloseCurrentPopup();
+                        fraction = m_ProgressPopupData.progress.load(std::memory_order_relaxed);
+                        ImFormatString(buf, IM_COUNTOF(buf), "%s: %.0f%%", m_ProgressPopupData.name, fraction * 100 + 0.01f);
                     }
+                    ImGui::ProgressBar(fraction, ImVec2(0.0f, 0.0f), buf);
+
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::Spacing();
+
+                    if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)))
+                        sendAndExecCommand(cmd::Cancel());
                 }
-            }
-            else {
-                ImGui::CloseCurrentPopup();
+                else {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
 
-            ImGui::EndPopup();
+            ImGui::SetNextWindowPos(mainViewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            if (ImGui::BeginPopupModal(
+                "Error", nullptr,
+                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
+            )) {
+                ImGui::TextUnformatted(m_ErrorMsg.c_str(), m_ErrorMsg.c_str() + m_ErrorMsg.size());
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
+                    m_ErrorMsg.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+
+                ImGui::SetItemDefaultFocus();
+                ImGui::EndPopup();
+            }
         }
 
         ImGui::End();
@@ -226,12 +251,30 @@ void Ui::render() {
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 }
 
-std::optional<Command> Ui::takeCommand() {
-    if (!m_Command.has_value())
-        return std::nullopt;
-    return std::exchange(m_Command, std::nullopt);
+Ui::ProgressPopupRAII::ProgressPopupRAII(ProgressPopupData* dataPtr) : m_DataPtr(dataPtr) {}
+
+Ui::ProgressPopupRAII::~ProgressPopupRAII() {
+    m_DataPtr->name = nullptr;
 }
 
-void Ui::setGenTxtProgressTS(const float val) {
-    m_GenTxtProgress.store(val, std::memory_order_relaxed);
+void Ui::ProgressPopupRAII::setProgressTS(const float val) const {
+    m_DataPtr->progress.store(val, std::memory_order_relaxed);
+}
+
+std::unique_ptr<Ui::ProgressPopupRAII> Ui::acquireProgressPopup(const char *name, const bool infinite) {
+    if (m_ProgressPopupData.name)
+        return nullptr;
+
+    m_ProgressPopupData.name = name;
+    m_ProgressPopupData.infinite = infinite;
+    if (!m_ProgressPopupData.infinite)
+        m_ProgressPopupData.progress.store(0.0f, std::memory_order_relaxed);
+
+    return std::make_unique<ProgressPopupRAII>(&m_ProgressPopupData);
+}
+
+bool Ui::sendAndExecCommand(const Command& command) const {
+    if (m_SendCommand)
+        return m_SendCommand(command);
+    return false;
 }

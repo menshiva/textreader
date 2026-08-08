@@ -3,29 +3,42 @@
 #include "../app/Win32App.h"
 #include "../ui/Ui.h"
 #include "../utils/profiler/ScopedProfiler.h"
+#include "file/FileWriter.h"
 
-Controller::Controller(Win32App &app, Ui& ui) : m_LineIndexer(m_File), m_App(app), m_Ui(ui) {}
+Controller::Controller(Win32App &app, Ui& ui) : m_App(app), m_Ui(ui) {
+    ui.setCommandHandler([this] (const Command& cmd) {
+        return process(cmd);
+    });
+}
 
 Controller::~Controller() {
     closeFileImpl(true);
 }
 
 void Controller::tick() {
-    if (m_TextGenDone.exchange(false, std::memory_order_acq_rel))
+    if (m_TextGenerationData.running && m_TextGenerationData.done.load(std::memory_order_acquire))
         endGenFileImpl();
 }
 
-void Controller::operator()(const cmd::OpenFile&) {
+bool Controller::operator()(const cmd::Cancel&) {
+    if (m_TextGenerationData.running)
+        endGenFileImpl();
+    return false;
+}
+
+bool Controller::operator()(const cmd::OpenFile&) {
     const auto filePathOpt = m_App.showTextFileDialog(true);
     if (filePathOpt.has_value())
         openFileImpl(filePathOpt.value());
+    return false;
 }
 
-void Controller::operator()(const cmd::OpenUrl&) {
+bool Controller::operator()(const cmd::OpenUrl&) {
     // TODO
+    return false;
 }
 
-void Controller::operator()(const cmd::GenRandom& cmd) {
+bool Controller::operator()(const cmd::GenRandom& cmd) {
     uint64_t bytes = 0, lines = 0;
     switch (cmd.type) {
         case cmd::GenRandom::Type::Kb: bytes = static_cast<uint64_t>(cmd.value) << 10; break;
@@ -33,31 +46,23 @@ void Controller::operator()(const cmd::GenRandom& cmd) {
         case cmd::GenRandom::Type::Gb: bytes = static_cast<uint64_t>(cmd.value) << 30; break;
         case cmd::GenRandom::Type::Lines: lines = cmd.value; break;
     }
-    startGenFileImpl(bytes, lines);
+    return startGenFileImpl(bytes, lines);
 }
 
-void Controller::operator()(const cmd::CancelGenRandom&) {
-    resetTextGenWorkingThread();
-    m_App.removeTmpTextFiles(false, true);
-    m_Ui.setGenTxtState(Ui::GenTxtState::Idle);
-}
-
-void Controller::operator()(const cmd::SaveAs&) {
+bool Controller::operator()(const cmd::SaveAs&) {
     const auto filePathOpt = m_App.showTextFileDialog(false);
     int lol = 0;
     ++lol;
+    return false;
 }
 
-void Controller::operator()(const cmd::Close&) {
+bool Controller::operator()(const cmd::Close&) {
     closeFileImpl(true);
-}
-
-bool Controller::isReadingTmpFile() const {
-    return m_File.getPath() == m_App.getTmpTextFileReadPath();
+    return false;
 }
 
 void Controller::openFileImpl(const std::filesystem::path& path) {
-    if (path == m_File.getPath())
+    /*if (path == m_File.getPath())
         return;
 
     const bool wasReadingTmp = isReadingTmpFile();
@@ -71,35 +76,36 @@ void Controller::openFileImpl(const std::filesystem::path& path) {
 
     const auto fileName = path.filename();
     m_App.setWindowTitle(fileName.c_str());
-    m_Ui.setFileOpen(true);
+    m_Ui.setFileOpen(true);*/
 
     // TODO
 }
 
-void Controller::resetTextGenWorkingThread() {
-    if (m_TextGenWorkingThread.joinable()) {
-        m_TextGenWorkingThread.request_stop();
-        m_TextGenWorkingThread.join();
-    }
-    m_TextGenDone.store(false, std::memory_order_release);
-}
-
-void Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t targetLines) {
+bool Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t targetLines) {
+    if (m_TextGenerationData.running)
+        return false;
     if (!targetBytes && !targetLines)
-        return;
+        return false;
 
-    resetTextGenWorkingThread();
-
-    auto tmpFileDescPtr = m_App.getTmpTextFileWriteDescriptor();
-    if (!tmpFileDescPtr) {
-        m_Ui.showErrorMsg("Cannot create or access temp file (write)");
-        return;
+    const auto& tmpFilePath = m_App.getTmpTextFilePath();
+    if (tmpFilePath.empty()) {
+        m_Ui.showErrorMsg("Cannot get temp text file path");
+        return false;
     }
 
-    m_Ui.setGenTxtState(Ui::GenTxtState::Running);
+    // TODO: close tmp file if opened
+
+    static constexpr size_t buffSize = 1ull << 20; // 1 mb
+    auto fileWriterPtr = FileWriter::open(tmpFilePath, buffSize, targetBytes);
+    if (!fileWriterPtr) {
+        m_Ui.showErrorMsg("Cannot create temp text file");
+        return false;
+    }
+
+    auto uiProgressPtr = m_Ui.acquireProgressPopup("Generating", false);
 
     // ReSharper disable once CppPassValueParameterByConstReference
-    m_TextGenWorkingThread = std::jthread([this, desc = std::move(tmpFileDescPtr), targetBytes, targetLines] (const std::stop_token st) {
+    m_TextGenerationData.thread = std::jthread([this, w = std::move(fileWriterPtr), progressPtr = std::move(uiProgressPtr), targetBytes, targetLines] (const std::stop_token st) {
         // tried to use std::mt19937 and std::uniform_int_distribution<int>, but it was too slow
         // using https://prng.di.unimi.it/splitmix64.c instead
         struct SplitMix64 {
@@ -120,8 +126,9 @@ void Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t tar
         static constexpr uint32_t alphabetLen = sizeof(alphabet) - 1;
         static constexpr uint32_t lineLen = 1024;
 
-        // TODO: profile
+        m_TextGenerationData.failed = false;
 
+        // TODO: profile
         {
             ScopedProfiler sw("pool");
 
@@ -131,34 +138,36 @@ void Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t tar
                 pool[i] = alphabet[rnd.next() % alphabetLen];
             static constexpr size_t poolSpan = poolSize - lineLen;
 
-            static constexpr size_t buffSize = 1ull << 20; // 1 mb
-            std::vector<char> storage(buffSize);
-            char* const begin = storage.data();
-            const char* const end = storage.data() + buffSize;
+            char* begin = w->getCurrentBuffer();
+            const char* end = begin + buffSize;
             char* p = begin;
 
-            const auto flushBuffer = [&] (const size_t count, const float percent) {
-                fwrite(begin, 1, count, desc->file);
-                m_Ui.setGenTxtProgressTS(percent);
-                p = begin;
+            const auto flushBuffer = [&] (const size_t count, const float percent) -> bool {
+                if (w->submit(count)) {
+                    progressPtr->setProgressTS(percent);
+                    begin = w->getCurrentBuffer(); // buffer has changed
+                    end = begin + buffSize;
+                    p = begin;
+                    return true;
+                }
+                return false;
             };
-            const auto appendChunkAndFlush = [&] (uint32_t left, const float percent) {
+            const auto appendChunkAndFlush = [&] (uint32_t left, const float percent) -> bool {
                 while (left > 0) {
-                    if (p == end)
-                        flushBuffer(buffSize, percent);
-
+                    if (p == end && !flushBuffer(buffSize, percent))
+                        return false;
                     const uint32_t chunk = std::min<uint32_t>(static_cast<uint32_t>(end - p), left);
                     memcpy(p, pool.data() + rnd.next() % poolSpan, chunk);
                     p += chunk;
                     left -= chunk;
                 }
-
-                if (p == end)
-                    flushBuffer(buffSize, percent);
+                if (p == end && !flushBuffer(buffSize, percent))
+                    return false;
                 *p++ = '\r';
-                if (p == end)
-                    flushBuffer(buffSize, percent);
+                if (p == end && !flushBuffer(buffSize, percent))
+                    return false;
                 *p++ = '\n';
+                return true;
             };
 
             if (targetBytes) {
@@ -171,7 +180,10 @@ void Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t tar
                     if (len > maxLen) len = maxLen;
                     if (remaining - 2 - len == 1) ++len;
 
-                    appendChunkAndFlush(len, static_cast<float>(targetBytes - remaining) / targetBytesFlt);
+                    if (!appendChunkAndFlush(len, static_cast<float>(targetBytes - remaining) / targetBytesFlt)) {
+                        m_TextGenerationData.failed = true;
+                        break;
+                    }
                     remaining -= len + 2;
                 }
             }
@@ -179,44 +191,61 @@ void Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t tar
                 const float targetLinesFlt = static_cast<float>(targetLines);
                 for (uint64_t n = 0; !st.stop_requested() && n < targetLines; ++n) {
                     const uint32_t left = rnd.next() % lineLen;
-                    appendChunkAndFlush(left, static_cast<float>(n) / targetLinesFlt);
+                    if (!appendChunkAndFlush(left, static_cast<float>(n) / targetLinesFlt)) {
+                        m_TextGenerationData.failed = true;
+                        break;
+                    }
                 }
             }
 
-            if (p != begin)
-                flushBuffer(p - begin, 1.0f);
+            if (!w->finish(static_cast<size_t>(p - begin)))
+                m_TextGenerationData.failed = true;
         }
 
         if (!st.stop_requested())
-            m_TextGenDone.store(true, std::memory_order_release);
+            m_TextGenerationData.done.store(true, std::memory_order_release);
     });
+    m_TextGenerationData.running = true;
+
+    return true;
 }
 
 void Controller::endGenFileImpl() {
-    resetTextGenWorkingThread();
+    if (!m_TextGenerationData.running)
+        return;
 
-    if (m_App.getTmpTextFileReadPath().empty()) {
-        m_App.removeTmpTextFiles(true, true);
-        m_Ui.setGenTxtState(Ui::GenTxtState::Idle);
-        m_Ui.showErrorMsg("Cannot create or access temp file (read)");
+    if (m_TextGenerationData.thread.joinable()) {
+        m_TextGenerationData.thread.request_stop();
+        m_TextGenerationData.thread.join();
+    }
+    m_TextGenerationData.running = false;
+    const bool failed = std::exchange(m_TextGenerationData.failed, false);
+    const bool done = m_TextGenerationData.done.exchange(false, std::memory_order_acq_rel);
+
+    const auto& tmpFilePath = m_App.getTmpTextFilePath();
+    if (tmpFilePath.empty()) {
+        m_Ui.showErrorMsg("Cannot get temp text file path");
         return;
     }
 
-    if (isReadingTmpFile())
-        closeFileImpl(false);
-    m_App.exchangeTmpTextFiles();
-    m_Ui.setGenTxtState(Ui::GenTxtState::None);
-    openFileImpl(m_App.getTmpTextFileReadPath());
+    if (done && !failed) {
+        // TODO: open tmpFilePath
+        return;
+    }
+
+    if (failed)
+        m_Ui.showErrorMsg("Cannot create temp text file");
+    std::filesystem::remove(tmpFilePath);
 }
 
 void Controller::closeFileImpl(const bool removeTmp) {
-    const bool wasReadingTmp = isReadingTmpFile();
+    /*const bool wasReadingTmp = isReadingTmpFile();
     m_LineIndexer.clear();
     m_File.close();
     if (removeTmp && wasReadingTmp)
-        m_App.removeTmpTextFiles(true, false);
+        m_App.removeTmpTextFiles(true, false);*/
 
-    m_App.resetWindowTitle();
+    m_App.setWindowTitle(std::nullopt);
     m_Ui.setFileOpen(false);
 
     // TODO

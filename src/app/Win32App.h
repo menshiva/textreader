@@ -1,13 +1,12 @@
 ﻿#pragma once
 
 #include <d3d11.h>
-#include <optional>
 #include <filesystem>
 #include "imgui.h"
 
 class Win32App {
 public:
-    Win32App(const wchar_t* windowName, UINT initW, UINT initH);
+    Win32App(const wchar_t* windowName, UINT initW, UINT initH, bool& outInitialized);
     ~Win32App();
 
     Win32App(const Win32App&) = delete;
@@ -19,53 +18,45 @@ public:
     bool beginFrame();
     void bindAndClear(const ImVec4& clearColor) const;
     void present(bool vsync);
-
     void queueResize(UINT w, UINT h);
+
+    float getDpiScale() const { return m_WindowData.dpiScale; }
+    HWND hwnd() const { return m_WindowData.hwnd; }
+    ID3D11Device* device() const { return m_D3D11Data.device; }
+    ID3D11DeviceContext* context() const { return m_D3D11Data.context; }
+
+    bool shouldClose() const { return m_WindowData.shouldClose; }
+
+    void setWindowTitle(const std::optional<const wchar_t*>& titleOpt) const;
 
     std::optional<std::filesystem::path> showTextFileDialog(bool open) const;
 
-    void setWindowTitle(const wchar_t* title) const;
-    void resetWindowTitle() const;
-
-    bool isInitialized() const { return m_Initialized; }
-    bool shouldClose() const { return m_ShouldClose; }
-
-    struct TmpFileDescriptor {
-        ~TmpFileDescriptor();
-        FILE* file = nullptr;
-    };
-    std::unique_ptr<TmpFileDescriptor> getTmpTextFileWriteDescriptor() const;
-    void exchangeTmpTextFiles() const;
-    void removeTmpTextFiles(bool removeR, bool removeW) const;
-    const std::filesystem::path& getTmpTextFileReadPath() const { return m_TmpTextFileReadPath; }
-
-    float getDpiScale() const { return m_DpiScale; }
-    HWND hwnd() const { return m_Hwnd; }
-    ID3D11Device* device() const { return m_pd3dDevice; }
-    ID3D11DeviceContext* context() const { return m_pd3dDeviceContext; }
+    const std::filesystem::path& getTmpTextFilePath() const { return m_TmpTextFilePath; }
 private:
     bool CreateDeviceD3D();
     void CleanupDeviceD3D();
     void CreateRenderTarget();
     void CleanupRenderTarget();
 
-    const wchar_t* m_InitialWindowName;
-    float m_DpiScale = 1.0f;
+    struct WindowData {
+        const wchar_t* initialWindowName;
+        float dpiScale = 1.0f;
 
-    LPCWSTR m_lpClassName = nullptr;
-    HINSTANCE m_hInstance = nullptr;
-    HWND m_Hwnd = nullptr;
+        LPCWSTR lpClassName = nullptr;
+        HINSTANCE hInstance = nullptr;
+        HWND hwnd = nullptr;
 
-    bool m_Initialized = false;
-    bool m_ShouldClose = false;
+        bool shouldClose = false;
+    } m_WindowData;
 
-    std::filesystem::path m_TmpTextFileReadPath;
-    std::filesystem::path m_TmpTextFileWritePath;
+    struct D3D11Data {
+        ID3D11Device* device = nullptr;
+        ID3D11DeviceContext* context = nullptr;
+        ID3D11RenderTargetView* renderTargetView = nullptr;
+        IDXGISwapChain* swapChain = nullptr;
+        bool swapChainOccluded = false;
+        UINT resizeWidth = 0, resizeHeight = 0;
+    } m_D3D11Data;
 
-    ID3D11Device* m_pd3dDevice = nullptr;
-    ID3D11DeviceContext* m_pd3dDeviceContext = nullptr;
-    ID3D11RenderTargetView* m_mainRenderTargetView = nullptr;
-    IDXGISwapChain* m_pSwapChain = nullptr;
-    bool m_SwapChainOccluded = false;
-    UINT m_ResizeWidth = 0, m_ResizeHeight = 0;
+    std::filesystem::path m_TmpTextFilePath;
 };

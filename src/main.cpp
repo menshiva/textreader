@@ -3,12 +3,15 @@
 #include "controller/Controller.h"
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
-    Win32App app(L"TextReader", 1280, 720);
-    if (!app.isInitialized())
+    bool appInitialized = false;
+    Win32App app(L"TextReader", 1280, 720, appInitialized);
+    if (!appInitialized)
         return 1;
+
     Ui ui(app);
     Controller controller(app, ui);
 
+    // TODO
 // #ifdef _DEBUG
     AllocConsole();
     FILE* dummy;
@@ -26,8 +29,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             app.present(true);
         }
 
-        if (const auto cmd = ui.takeCommand())
-            controller.process(*cmd);
         controller.tick();
     }
 

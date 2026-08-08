@@ -15,7 +15,7 @@ public:
 
     static std::unique_ptr<FileWriter> open(const std::filesystem::path& path, size_t bufferSize, uint64_t preallocBytes = 0);
 
-    char* getCurrentBuffer() const { return m_Buffer; }
+    char* getBuffer() const { return m_Buffer; }
     size_t getBufferSize() const { return m_BufferSize; }
 
     bool submit(size_t count);

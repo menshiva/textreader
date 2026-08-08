@@ -1,11 +1,8 @@
 ﻿#pragma once
 
-#include <filesystem>
 #include <thread>
-#include "Commands.h"
-
-class Win32App;
-class Ui;
+#include "../app/Win32App.h"
+#include "../ui/Ui.h"
 
 class Controller {
 public:
@@ -39,13 +36,11 @@ private:
 
     struct TextGenerationData {
         std::jthread thread;
-        bool running = false;
+        std::unique_ptr<Ui::ProgressPopupRAII> progress;
         bool failed = false;
         std::atomic<bool> done = false;
     } m_TextGenerationData;
 
     /*FileMapping m_File;
-    LineIndexer m_LineIndexer;
-
-    */
+    LineIndexer m_LineIndexer;*/
 };

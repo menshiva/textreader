@@ -1,27 +1,26 @@
 ﻿#include "Controller.h"
 #include <random>
-#include "../app/Win32App.h"
-#include "../ui/Ui.h"
 #include "../utils/profiler/ScopedProfiler.h"
 #include "file/FileWriter.h"
 
 Controller::Controller(Win32App &app, Ui& ui) : m_App(app), m_Ui(ui) {
-    ui.setCommandHandler([this] (const Command& cmd) {
+    m_Ui.setCommandHandler([this] (const Command& cmd) {
         return process(cmd);
     });
 }
 
 Controller::~Controller() {
+    m_Ui.setCommandHandler(nullptr);
     closeFileImpl(true);
 }
 
 void Controller::tick() {
-    if (m_TextGenerationData.running && m_TextGenerationData.done.load(std::memory_order_acquire))
+    if (m_TextGenerationData.progress && m_TextGenerationData.done.load(std::memory_order_acquire))
         endGenFileImpl();
 }
 
 bool Controller::operator()(const cmd::Cancel&) {
-    if (m_TextGenerationData.running)
+    if (m_TextGenerationData.progress)
         endGenFileImpl();
     return false;
 }
@@ -82,7 +81,7 @@ void Controller::openFileImpl(const std::filesystem::path& path) {
 }
 
 bool Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t targetLines) {
-    if (m_TextGenerationData.running)
+    if (m_TextGenerationData.progress)
         return false;
     if (!targetBytes && !targetLines)
         return false;
@@ -102,10 +101,15 @@ bool Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t tar
         return false;
     }
 
-    auto uiProgressPtr = m_Ui.acquireProgressPopup("Generating", false);
+    m_TextGenerationData.progress = m_Ui.acquireProgressPopup("Generating", false);
+    if (!m_TextGenerationData.progress) {
+        m_Ui.showErrorMsg("Already busy");
+        return false;
+    }
 
+    m_TextGenerationData.failed = false;
     // ReSharper disable once CppPassValueParameterByConstReference
-    m_TextGenerationData.thread = std::jthread([this, w = std::move(fileWriterPtr), progressPtr = std::move(uiProgressPtr), targetBytes, targetLines] (const std::stop_token st) {
+    m_TextGenerationData.thread = std::jthread([this, w = std::move(fileWriterPtr), targetBytes, targetLines] (const std::stop_token st) {
         // tried to use std::mt19937 and std::uniform_int_distribution<int>, but it was too slow
         // using https://prng.di.unimi.it/splitmix64.c instead
         struct SplitMix64 {
@@ -126,8 +130,6 @@ bool Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t tar
         static constexpr uint32_t alphabetLen = sizeof(alphabet) - 1;
         static constexpr uint32_t lineLen = 1024;
 
-        m_TextGenerationData.failed = false;
-
         // TODO: profile
         {
             ScopedProfiler sw("pool");
@@ -138,15 +140,13 @@ bool Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t tar
                 pool[i] = alphabet[rnd.next() % alphabetLen];
             static constexpr size_t poolSpan = poolSize - lineLen;
 
-            char* begin = w->getCurrentBuffer();
+            char* begin = w->getBuffer();
             const char* end = begin + buffSize;
             char* p = begin;
 
             const auto flushBuffer = [&] (const size_t count, const float percent) -> bool {
                 if (w->submit(count)) {
-                    progressPtr->setProgressTS(percent);
-                    begin = w->getCurrentBuffer(); // buffer has changed
-                    end = begin + buffSize;
+                    m_TextGenerationData.progress->setProgressTS(percent);
                     p = begin;
                     return true;
                 }
@@ -205,20 +205,19 @@ bool Controller::startGenFileImpl(const uint64_t targetBytes, const uint64_t tar
         if (!st.stop_requested())
             m_TextGenerationData.done.store(true, std::memory_order_release);
     });
-    m_TextGenerationData.running = true;
 
     return true;
 }
 
 void Controller::endGenFileImpl() {
-    if (!m_TextGenerationData.running)
+    if (!m_TextGenerationData.progress)
         return;
 
     if (m_TextGenerationData.thread.joinable()) {
         m_TextGenerationData.thread.request_stop();
         m_TextGenerationData.thread.join();
     }
-    m_TextGenerationData.running = false;
+    m_TextGenerationData.progress.reset();
     const bool failed = std::exchange(m_TextGenerationData.failed, false);
     const bool done = m_TextGenerationData.done.exchange(false, std::memory_order_acq_rel);
 

@@ -13,16 +13,15 @@ std::unique_ptr<FileWriter> FileWriter::open(const std::filesystem::path& path, 
 
     auto res = std::unique_ptr<FileWriter>(new FileWriter());
 
-    static constexpr DWORD kBase = FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN;
     res->m_Handle = CreateFileW(
         path.c_str(), GENERIC_WRITE, 0, nullptr,
-        CREATE_ALWAYS, kBase | FILE_FLAG_NO_BUFFERING, nullptr
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING, nullptr
     );
     if (res->m_Handle == INVALID_HANDLE_VALUE) {
         // try to open a file without FILE_FLAG_NO_BUFFERING
         res->m_Handle = CreateFileW(
             path.c_str(), GENERIC_WRITE, 0, nullptr,
-            CREATE_ALWAYS, kBase, nullptr
+            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr
         );
         if (res->m_Handle == INVALID_HANDLE_VALUE)
             return nullptr;

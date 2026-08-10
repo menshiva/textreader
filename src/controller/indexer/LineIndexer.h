@@ -18,9 +18,8 @@ public:
     void build();
     void clear();
 
-    std::string_view get(size_t i) const;
-
-    size_t count() const { return m_LineOffsets.size(); }
+    std::string_view get(uint64_t i) const;
+    uint64_t count() const { return m_LineOffsets.size(); }
 private:
     FileMapping& m_File;
 

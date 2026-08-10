@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include "../controller/Commands.h"
+#include "textView/TextView.h"
 
 class Win32App;
 
@@ -23,8 +24,10 @@ public:
     void build();
     static void render();
 
+    void setTextViewSource(TextView::Source source) { m_TextViewSource = std::move(source); }
+    void setFileOpen(bool open);
+
     void showErrorMsg(std::string msg) { m_ErrorMsg = std::move(msg); }
-    void setFileOpen(const bool open) { m_FileOpen = open; }
 private:
     struct ProgressPopupData {
         const char* name = nullptr;
@@ -46,7 +49,9 @@ private:
 
     CommandHandler m_SendCommand;
 
-    std::string m_ErrorMsg;
-
+    TextView::Source m_TextViewSource;
+    TextView m_TextView;
     bool m_FileOpen = false;
+
+    std::string m_ErrorMsg;
 };

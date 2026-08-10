@@ -42,6 +42,9 @@ Ui::Ui(const Win32App& app) {
     //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf");
     //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf");
     //IM_ASSERT(font != nullptr);
+
+    const auto font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\consola.ttf", 14.0f, nullptr);
+    IM_ASSERT(font != nullptr);
 }
 
 Ui::~Ui() {
@@ -64,15 +67,18 @@ void Ui::build() {
         ImGui::SetNextWindowPos(mainViewport->WorkPos);
         ImGui::SetNextWindowSize(mainViewport->WorkSize);
 
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0)); // remove padding - useful for text view
         ImGui::Begin(
             "Main window", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
             | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBringToFrontOnFocus
         );
+        ImGui::PopStyleVar();
 
-        bool openGenText = false;
+        m_TextView.draw(m_TextViewSource);
 
         // menu bar
+        bool openGenText = false;
         if (ImGui::BeginMenuBar()) {
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("Open...", "Ctrl+O"))
@@ -249,6 +255,11 @@ void Ui::build() {
 void Ui::render() {
     ImGui::Render();
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+}
+
+void Ui::setFileOpen(const bool open) {
+    m_FileOpen = open;
+    m_TextView.reset();
 }
 
 Ui::ProgressPopupRAII::ProgressPopupRAII(ProgressPopupData* dataPtr) : m_DataPtr(dataPtr) {}

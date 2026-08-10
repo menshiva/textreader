@@ -42,7 +42,7 @@ void LineIndexer::clear() {
     m_LineOffsets.shrink_to_fit(); // clear allocation
 }
 
-std::string_view LineIndexer::get(const size_t i) const {
+std::string_view LineIndexer::get(const uint64_t i) const {
     if (i >= count())
         return {};
     const uint64_t fileSize = m_File.getSize();

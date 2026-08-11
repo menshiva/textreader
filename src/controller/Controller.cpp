@@ -62,8 +62,11 @@ bool Controller::isReadingFromTmp() const {
     return m_File.getPath() == m_App.getTmpTextFilePath();
 }
 
-std::string_view Controller::getTextDataImpl(const uint64_t lineIdx, const uint64_t fromCol, const uint64_t maxCols) const {
-    return m_LineIndexer.get(lineIdx, fromCol, maxCols);
+std::string_view Controller::getTextDataImpl(
+    const uint64_t lineIdx, const uint64_t fromCol, const uint64_t maxCols,
+    uint64_t& outLineTotalLength
+) const {
+    return m_LineIndexer.get(lineIdx, fromCol, maxCols, outLineTotalLength);
 }
 
 bool Controller::openFileImpl(const std::filesystem::path& path) {
@@ -82,7 +85,7 @@ bool Controller::openFileImpl(const std::filesystem::path& path) {
     const auto fileName = path.filename();
     m_App.setWindowTitle(fileName.c_str());
     m_Ui.setFileOpened({
-        std::bind(&Controller::getTextDataImpl, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
+        std::bind(&Controller::getTextDataImpl, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4),
         {m_LineIndexer.maxLineLength(), m_LineIndexer.count()}
     });
 

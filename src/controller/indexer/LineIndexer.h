@@ -18,7 +18,7 @@ public:
     void build();
     void clear();
 
-    std::string_view get(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols) const;
+    std::string_view get(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols, uint64_t& outLineTotalLength) const;
     uint64_t count() const { return m_LineOffsets.size(); }
     uint64_t maxLineLength() const { return m_MaxLineLength; }
 private:

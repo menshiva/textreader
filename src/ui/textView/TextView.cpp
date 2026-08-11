@@ -11,6 +11,7 @@ void TextView::reset(Source source) {
         m_xyScrollData[i].scrollbarDragOffsetOpt.reset();
         m_xyScrollData[i].currentAnimationOpt.reset();
     }
+    m_MaxVisibleLineLength = 0;
 }
 
 void TextView::draw() {
@@ -110,6 +111,7 @@ void TextView::draw() {
     }
 
     // text view
+    m_MaxVisibleLineLength = 0;
     if (const auto tvDataPtr = layoutData.textViewDataOpt.has_value() ? &layoutData.textViewDataOpt.value() : nullptr) {
         const auto& textViewRegion = tvDataPtr->region;
         dl->PushClipRect(textViewRegion.Min,textViewRegion.Max, true);
@@ -120,7 +122,10 @@ void TextView::draw() {
 
             const float y = std::floor(textViewRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[1].pixelOffsetRemainder);
 
-            const auto s = m_Source.getLine(lineNo, m_xyScrollData[0].firstIdx, layoutData.xyMetrics[0].reservedNum + 1);
+            uint64_t totalLineLength = 0;
+            const auto s = m_Source.getLine(lineNo, m_xyScrollData[0].firstIdx, layoutData.xyMetrics[0].reservedNum + 1, totalLineLength);
+            if (totalLineLength > m_MaxVisibleLineLength)
+                m_MaxVisibleLineLength = totalLineLength;
 
             dl->AddText(ImVec2(textViewRegion.Min.x - m_xyScrollData[0].pixelOffsetRemainder, y), textColor, s.data(), s.data() + s.size());
         }
@@ -385,13 +390,10 @@ void TextView::handleInput(const LayoutData& layoutData, const ImVec2& fontSize)
     if (handleScrollbarInput(layoutData, fontSize))
         return;
 
-    if (!ImGui::IsWindowHovered())
-        return;
-
     const auto& io = ImGui::GetIO();
 
-    // mouse wheel input
-    {
+    // mouse wheel
+    if (ImGui::IsWindowHovered()) {
         ImVec2 delta(0.0f, 0.0f);
         if (io.MouseWheelH != 0.0f)
             delta.x = -io.MouseWheelH * kHorizontalCharsPerWheelScroll;
@@ -406,6 +408,38 @@ void TextView::handleInput(const LayoutData& layoutData, const ImVec2& fontSize)
         for (int i = 0; i < 2; ++i)
             if (delta[i] != 0.0f)
                 scrollByPixels(fontSize, delta, i);
+    }
+
+    // keyboard
+    if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && !ImGui::IsAnyItemActive()) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Home, false)) {
+            if (!io.KeyCtrl)
+                animateTo(fontSize, 0.0, 0); // move to x=0
+            else
+                animateTo(fontSize, 0.0, 1); // move to y=0
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_End, false)) {
+            if (!io.KeyCtrl) {
+                // move to x=length of longest visible line
+                const auto maxVisibleLineLengthDbl = static_cast<double>(m_MaxVisibleLineLength);
+                const auto visibleDbl = static_cast<double>(layoutData.xyMetrics[0].visibleNumFlt);
+                const double target = maxVisibleLineLengthDbl > visibleDbl ? maxVisibleLineLengthDbl - visibleDbl : 0.0;
+                animateTo(fontSize, target, 0);
+            }
+            else {
+                // move to y=last line
+                const double maxVerticalPos = m_Source.maxNum[1] > layoutData.xyMetrics[1].reservedNum
+                    ? static_cast<double>(m_Source.maxNum[1]) - static_cast<double>(layoutData.xyMetrics[1].visibleNumFlt)
+                    : 0.0;
+                animateTo(fontSize, maxVerticalPos, 1);
+            }
+        }
+
+        const double pageLinesNum = static_cast<double>(layoutData.xyMetrics[1].fullVisibleNum);
+        if (ImGui::IsKeyPressed(ImGuiKey_PageDown, true))
+            animateTo(fontSize, getCurrentPos(fontSize, 1) + pageLinesNum, 1);
+        if (ImGui::IsKeyPressed(ImGuiKey_PageUp, true))
+            animateTo(fontSize, getCurrentPos(fontSize, 1) - pageLinesNum, 1);
     }
 }
 

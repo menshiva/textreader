@@ -28,7 +28,7 @@ public:
 private:
     bool isReadingFromTmp() const;
 
-    std::string_view getTextDataImpl(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols) const;
+    std::string_view getTextDataImpl(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols, uint64_t& outLineTotalLength) const;
 
     bool openFileImpl(const std::filesystem::path& path);
     void closeFileImpl(bool removeTmp);

@@ -87,7 +87,8 @@ void LineIndexer::clear() {
     m_MaxLineLength = 0;
 }
 
-std::string_view LineIndexer::get(const uint64_t lineIdx, const uint64_t fromCol, const uint64_t maxCols) const {
+std::string_view LineIndexer::get(const uint64_t lineIdx, const uint64_t fromCol, const uint64_t maxCols, uint64_t& outLineTotalLength) const {
+    outLineTotalLength = 0;
     if (lineIdx >= count())
         return {};
 
@@ -105,6 +106,9 @@ std::string_view LineIndexer::get(const uint64_t lineIdx, const uint64_t fromCol
         sv.remove_suffix(1);
     if (!sv.empty() && sv.back() == '\r')
         sv.remove_suffix(1);
+
+    for (const char c : sv)
+        outLineTotalLength += (static_cast<unsigned char>(c) & 0xC0) != 0x80;
 
     // cols to bytes
     const char* p = sv.data();

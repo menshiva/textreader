@@ -16,7 +16,7 @@ public:
     TextView& operator=(TextView&&) = delete;
 
     struct Source {
-        std::function<std::string_view(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols)> getLine;
+        std::function<std::string_view(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols, uint64_t& outLineTotalLength)> getLine;
         uint64_t maxNum[2];
     };
     void reset(Source source = Source{nullptr, {0, 0}});
@@ -84,6 +84,7 @@ private:
 
     Source m_Source;
     ScrollData m_xyScrollData[2];
+    uint64_t m_MaxVisibleLineLength = 0;
 
     static constexpr float kGutterTextHorizontalPadding = 4.0f;
     static constexpr uint64_t kGutterMinDigitsNum = 3;

@@ -4,7 +4,7 @@
 #include "imgui_internal.h"
 #include "../app/Win32App.h"
 
-Ui::Ui(const Win32App& app) : m_TextView() {
+Ui::Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt) : m_TextView() {
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -22,29 +22,27 @@ Ui::Ui(const Win32App& app) : m_TextView() {
     style.FontScaleDpi = app.getDpiScale(); // Set initial font scale. (in docking branch: using io.ConfigDpiScaleFonts=true automatically overrides this for every window depending on the current monitor)
 
     // Setup Platform/Renderer backends
-    ImGui_ImplWin32_Init(app.hwnd());
-    ImGui_ImplDX11_Init(app.device(), app.context());
+    if (!ImGui_ImplWin32_Init(app.hwnd())) {
+        outErrorMsgOpt = "Error initializing ImGui (Win32).";
+        return;
+    }
+    if (!ImGui_ImplDX11_Init(app.device(), app.context())) {
+        outErrorMsgOpt = "Error initializing ImGui (DX11).";
+        return;
+    }
 
-    // Load Fonts
-    // - If fonts are not explicitly loaded, Dear ImGui will select an embedded font: either AddFontDefaultVector() or AddFontDefaultBitmap().
-    //   This selection is based on (style.FontSizeBase * style.FontScaleMain * style.FontScaleDpi) reaching a small threshold.
-    // - You can load multiple fonts and use ImGui::PushFont()/PopFont() to select them.
-    // - If a file cannot be loaded, AddFont functions will return a nullptr. Please handle those errors in your code (e.g. use an assertion, display an error and quit).
-    // - Read 'docs/FONTS.md' for more instructions and details.
-    // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use FreeType for higher quality font rendering.
-    // - Remember that in C/C++ if you want to include a backslash \ in a string literal you need to write a double backslash \\ !
-    //style.FontSizeBase = 20.0f;
-    //io.Fonts->AddFontDefaultVector();
-    //io.Fonts->AddFontDefaultBitmap();
-    //io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf");
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf");
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf");
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf");
-    //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf");
-    //IM_ASSERT(font != nullptr);
-
-    const auto font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\consola.ttf", 14.0f, nullptr);
-    IM_ASSERT(font != nullptr);
+    // load fonts
+    {
+        auto fontPath = app.getExeDir() / L"fonts" / L"JetBrainsMono-Regular.ttf";
+        auto font = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), 18.0f, nullptr, nullptr);
+        if (!font) {
+            // fallback to consola.ttf
+            fontPath = app.getWinDir() / L"Fonts" / L"consola.ttf";
+            font = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), 16.0f, nullptr, nullptr);
+        }
+        if (!font)
+            outErrorMsgOpt = "Error loading font.";
+    }
 }
 
 Ui::~Ui() {

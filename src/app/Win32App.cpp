@@ -37,8 +37,7 @@ static LRESULT WINAPI WndProc(const HWND hWnd, const UINT msg, const WPARAM wPar
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH, bool& outInitialized) {
-    outInitialized = false;
+Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH, std::optional<std::string>& outErrorMsgOpt) {
     m_WindowData.initialWindowName = windowName;
 
     // Make process DPI aware and obtain main monitor scale
@@ -58,16 +57,33 @@ Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH
         m_WindowData.lpClassName, m_WindowData.initialWindowName, WS_OVERLAPPEDWINDOW, 100, 100,
         static_cast<int>(initW * m_WindowData.dpiScale), static_cast<int>(initH * m_WindowData.dpiScale), nullptr, nullptr, m_WindowData.hInstance, nullptr
     );
-    if (!m_WindowData.hwnd)
+    if (!m_WindowData.hwnd) {
+        outErrorMsgOpt = "Error creating a new Window.";
         return;
+    }
     SetWindowLongPtrW(m_WindowData.hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
     // Initialize Direct3D
-    if (!CreateDeviceD3D())
+    if (!CreateDeviceD3D()) {
+        outErrorMsgOpt = "Error initializing Direct3D.";
         return;
+    }
 
     ShowWindow(m_WindowData.hwnd, SW_SHOWDEFAULT);
     UpdateWindow(m_WindowData.hwnd);
+
+    {
+        wchar_t dir[MAX_PATH];
+        if (GetWindowsDirectoryW(dir, MAX_PATH))
+            m_WinDir = std::filesystem::path(dir);
+    }
+
+    {
+        wchar_t dir[MAX_PATH];
+        const DWORD n = GetModuleFileNameW(nullptr, dir, MAX_PATH);
+        if (n > 0 && n < MAX_PATH)
+            m_ExeDir = std::filesystem::path(dir).parent_path();
+    }
 
     {
         wchar_t dir[MAX_PATH + 1];
@@ -75,8 +91,6 @@ Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH
         if (n != 0 && n <= MAX_PATH)
             m_TmpTextFilePath = std::filesystem::path(dir) / L"TextReader (tmp)";
     }
-
-    outInitialized = true;
 }
 
 Win32App::~Win32App() {

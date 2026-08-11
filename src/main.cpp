@@ -2,13 +2,25 @@
 #include "ui/Ui.h"
 #include "controller/Controller.h"
 
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
-    bool appInitialized = false;
-    Win32App app(L"TextReader", 1280, 720, appInitialized);
-    if (!appInitialized)
-        return 1;
+static void fatalError(const std::string& msg) {
+    MessageBoxA(nullptr, msg.c_str(), "Fatal Error", MB_OK | MB_ICONERROR);
+}
 
-    Ui ui(app);
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    std::optional<std::string> errorMsgOpt;
+
+    Win32App app(L"TextReader", 1280, 720, errorMsgOpt);
+    if (errorMsgOpt.has_value()) {
+        fatalError(errorMsgOpt.value());
+        return 1;
+    }
+
+    Ui ui(app, errorMsgOpt);
+    if (errorMsgOpt.has_value()) {
+        fatalError(errorMsgOpt.value());
+        return 1;
+    }
+
     Controller controller(app, ui);
 
     // TODO

@@ -6,7 +6,7 @@
 
 class Win32App {
 public:
-    Win32App(const wchar_t* windowName, UINT initW, UINT initH, bool& outInitialized);
+    Win32App(const wchar_t* windowName, UINT initW, UINT initH, std::optional<std::string>& outErrorMsgOpt);
     ~Win32App();
 
     Win32App(const Win32App&) = delete;
@@ -31,6 +31,8 @@ public:
 
     std::optional<std::filesystem::path> showTextFileDialog(bool open) const;
 
+    const std::filesystem::path& getWinDir() const { return m_WinDir; }
+    const std::filesystem::path& getExeDir() const { return m_ExeDir; }
     const std::filesystem::path& getTmpTextFilePath() const { return m_TmpTextFilePath; }
 private:
     bool CreateDeviceD3D();
@@ -58,5 +60,7 @@ private:
         UINT resizeWidth = 0, resizeHeight = 0;
     } m_D3D11Data;
 
+    std::filesystem::path m_WinDir;
+    std::filesystem::path m_ExeDir;
     std::filesystem::path m_TmpTextFilePath;
 };

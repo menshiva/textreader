@@ -26,3 +26,10 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 add_executable(TextReader WIN32 ${SOURCES})
 target_link_libraries(TextReader PRIVATE IMGUI)
 target_compile_options(TextReader PRIVATE /utf-8 /W4 /permissive- /Zc:__cplusplus /MP)
+
+# copy fonts
+add_custom_command(TARGET TextReader POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/res/fonts
+        $<TARGET_FILE_DIR:TextReader>/fonts
+)

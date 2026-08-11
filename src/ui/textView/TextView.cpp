@@ -8,7 +8,8 @@ void TextView::reset(Source source) {
     for (int i = 0; i < 2; ++i) {
         m_xyScrollData[i].firstIdx = 0;
         m_xyScrollData[i].pixelOffsetRemainder = 0.0f;
-        m_xyScrollData[i].scrollbarDragOffset.reset();
+        m_xyScrollData[i].scrollbarDragOffsetOpt.reset();
+        m_xyScrollData[i].currentAnimationOpt.reset();
     }
 }
 
@@ -31,6 +32,7 @@ void TextView::draw() {
         return;
     }
 
+    updateAnimation(fontSize);
     for (int i = 0; i < 2; ++i)
         clampScrollData(fontSize, layoutData, m_Source.maxNum[i], i);
 
@@ -82,11 +84,11 @@ void TextView::draw() {
 
     // scrollbars
     for (int i = 0; i < 2; ++i) {
-        if (const auto sbDataPtr = layoutData.xyScrollbarData[i].has_value() ? &layoutData.xyScrollbarData[i].value() : nullptr) {
+        if (const auto sbDataPtr = layoutData.xyScrollbarDataOpt[i].has_value() ? &layoutData.xyScrollbarDataOpt[i].value() : nullptr) {
             const auto& scrollData = m_xyScrollData[i];
 
             auto colorPtr = &scrollbarColor;
-            if (scrollData.scrollbarDragOffset.has_value())
+            if (scrollData.scrollbarDragOffsetOpt.has_value())
                 colorPtr = &scrollbarActiveColor;
             else if (ImGui::IsWindowHovered() && sbDataPtr->region.Contains(ImGui::GetIO().MousePos))
                 colorPtr = &scrollbarHoveredColor;
@@ -108,7 +110,7 @@ void TextView::draw() {
     }
 
     // text view
-    if (const auto tvDataPtr = layoutData.textViewData.has_value() ? &layoutData.textViewData.value() : nullptr) {
+    if (const auto tvDataPtr = layoutData.textViewDataOpt.has_value() ? &layoutData.textViewDataOpt.value() : nullptr) {
         const auto& textViewRegion = tvDataPtr->region;
         dl->PushClipRect(textViewRegion.Min,textViewRegion.Max, true);
         for (uint64_t i = 0; i < layoutData.xyMetrics[1].reservedNum + 1; ++i) {
@@ -231,22 +233,22 @@ bool TextView::computeLayoutData(
             ImVec2(windowRegionMin.x, windowRegionMax.y - horizontalScrollbarHeight),
             ImVec2(windowRegionMax.x - verticalScrollbarWidth, windowRegionMax.y)
         );
-        outData.xyScrollbarData[0].emplace(computeScrollbarData(region, region.GetWidth(), outData.xyMetrics[0], sourceMaxLineLength));
+        outData.xyScrollbarDataOpt[0].emplace(computeScrollbarData(region, region.GetWidth(), outData.xyMetrics[0], sourceMaxLineLength));
     }
     if (verticalScrollbarWidth != 0.0f) {
         const ImRect region(
             ImVec2(windowRegionMax.x - verticalScrollbarWidth, windowRegionMin.y),
             ImVec2(windowRegionMax.x, windowRegionMax.y - horizontalScrollbarHeight)
         );
-        outData.xyScrollbarData[1].emplace(computeScrollbarData(region, region.GetHeight(), outData.xyMetrics[1], sourceMaxLinesNum));
+        outData.xyScrollbarDataOpt[1].emplace(computeScrollbarData(region, region.GetHeight(), outData.xyMetrics[1], sourceMaxLinesNum));
     }
 
     {
-        auto& textViewData = outData.textViewData.emplace();
+        auto& textViewData = outData.textViewDataOpt.emplace();
         textViewData.region.Min = ImVec2(outData.gutterData.region.Max.x + kTextViewLeftPadding, windowRegionMin.y);
         textViewData.region.Max = ImVec2(windowRegionMax.x - verticalScrollbarWidth, windowRegionMax.y - horizontalScrollbarHeight);
         if (textViewData.region.Max.x <= textViewData.region.Min.x || textViewData.region.Max.y <= textViewData.region.Min.y)
-            outData.textViewData.reset();
+            outData.textViewDataOpt.reset();
     }
 
     return true;
@@ -287,28 +289,45 @@ float TextView::computeScrollbarGrab(const ImVec2& fontSize, const LayoutData::S
 bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& fontSize) {
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
         for (int i = 0; i < 2; ++i)
-            m_xyScrollData[i].scrollbarDragOffset.reset();
+            m_xyScrollData[i].scrollbarDragOffsetOpt.reset();
 
     const LayoutData::ScrollbarData* sbPtrs[2];
     for (int i = 0; i < 2; ++i) {
-        sbPtrs[i] = layoutData.xyScrollbarData[i].has_value() ? &layoutData.xyScrollbarData[i].value() : nullptr;
+        sbPtrs[i] = layoutData.xyScrollbarDataOpt[i].has_value() ? &layoutData.xyScrollbarDataOpt[i].value() : nullptr;
         if (!sbPtrs[i])
-            m_xyScrollData[i].scrollbarDragOffset.reset();
+            m_xyScrollData[i].scrollbarDragOffsetOpt.reset();
     }
 
     const auto& io = ImGui::GetIO();
 
-    const bool alreadyDragging = m_xyScrollData[0].scrollbarDragOffset.has_value() || m_xyScrollData[1].scrollbarDragOffset.has_value();
+    const bool alreadyDragging = m_xyScrollData[0].scrollbarDragOffsetOpt.has_value() || m_xyScrollData[1].scrollbarDragOffsetOpt.has_value();
     if (!alreadyDragging && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsWindowHovered()) {
         // drag start
         for (int i = 0; i < 2; ++i) {
             const auto scrollBarDataPtr = sbPtrs[i];
             if (scrollBarDataPtr && scrollBarDataPtr->region.Contains(io.MousePos)) {
-                const float grab = computeScrollbarGrab(fontSize, *scrollBarDataPtr, i);
                 const float mousePos = io.MousePos[i];
-                m_xyScrollData[i].scrollbarDragOffset = mousePos >= grab && mousePos<= grab + scrollBarDataPtr->grab
-                    ? mousePos - grab // slider drag
-                    : scrollBarDataPtr->grab * 0.5f; // background click
+                const float grab = computeScrollbarGrab(fontSize, *scrollBarDataPtr, i);
+
+                auto& scrollData = m_xyScrollData[i];
+                if (mousePos >= grab && mousePos <= grab + scrollBarDataPtr->grab) {
+                    // slider drag
+                    scrollData.scrollbarDragOffsetOpt = mousePos - grab;   // схватили ползунок
+                    scrollData.currentAnimationOpt.reset();
+                }
+                else {
+                    // background click
+                    const float travel = scrollBarDataPtr->travel;
+                    if (travel > 0.0f) {
+                        const float rel = std::clamp(
+                            (mousePos - scrollBarDataPtr->grab * 0.5f - scrollBarDataPtr->region.Min[i]) / travel,
+                            0.0f, 1.0f
+                        );
+                        animateTo(fontSize, static_cast<double>(rel) * scrollBarDataPtr->maxPos, i);
+                    }
+                    scrollData.scrollbarDragOffsetOpt = scrollBarDataPtr->grab * 0.5f;
+                }
+
                 break;
             }
         }
@@ -318,19 +337,18 @@ bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& 
     for (int i = 0; i < 2; ++i) {
         const auto scrollBarDataPtr = sbPtrs[i];
         auto& scrollData = m_xyScrollData[i];
-        if (scrollBarDataPtr && scrollData.scrollbarDragOffset.has_value()) {
+        if (scrollBarDataPtr && scrollData.scrollbarDragOffsetOpt.has_value()) {
+            if (scrollData.currentAnimationOpt.has_value())
+                return true;
+
             if (scrollBarDataPtr->travel > 0.0f) {
                 const float rel = std::clamp(
-                    (io.MousePos[i] - scrollData.scrollbarDragOffset.value() - scrollBarDataPtr->region.Min[i]) / scrollBarDataPtr->travel,
+                    (io.MousePos[i] - scrollData.scrollbarDragOffsetOpt.value() - scrollBarDataPtr->region.Min[i]) / scrollBarDataPtr->travel,
                     0.0f, 1.0f
                 );
-
-                const double targetPos = static_cast<double>(rel) * scrollBarDataPtr->maxPos;
-                const double wholeLines = std::floor(targetPos);
-
-                scrollData.firstIdx = static_cast<uint64_t>(wholeLines);
-                scrollData.pixelOffsetRemainder = static_cast<float>((targetPos - wholeLines) * fontSize[i]);
+                setPos(fontSize, static_cast<double>(rel) * scrollBarDataPtr->maxPos, i);
             }
+
             return true;
         }
     }
@@ -340,8 +358,9 @@ bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& 
 
 void TextView::scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, const int idx) {
     auto& scrollData = m_xyScrollData[idx];
-    const float fontSizeVal = fontSize[idx];
+    scrollData.currentAnimationOpt.reset();
 
+    const float fontSizeVal = fontSize[idx];
     scrollData.pixelOffsetRemainder += delta[idx] * fontSizeVal;
 
     const float deltaUnits = std::floor(scrollData.pixelOffsetRemainder / fontSizeVal);
@@ -388,4 +407,50 @@ void TextView::handleInput(const LayoutData& layoutData, const ImVec2& fontSize)
             if (delta[i] != 0.0f)
                 scrollByPixels(fontSize, delta, i);
     }
+}
+
+double TextView::getCurrentPos(const ImVec2 &fontSize, const int idx) const {
+    return static_cast<double>(m_xyScrollData[idx].firstIdx) + static_cast<double>(m_xyScrollData[idx].pixelOffsetRemainder / fontSize[idx]);
+}
+
+void TextView::setPos(const ImVec2 &fontSize, const double pos, const int idx) {
+    const double clamped = std::max(0.0, pos);
+    const double whole = std::floor(clamped);
+    m_xyScrollData[idx].firstIdx = static_cast<uint64_t>(whole);
+    m_xyScrollData[idx].pixelOffsetRemainder = static_cast<float>((clamped - whole) * fontSize[idx]);
+}
+
+void TextView::updateAnimation(const ImVec2& fontSize) {
+    const float dt = std::min(ImGui::GetIO().DeltaTime, 0.1f);
+    for (int i = 0; i < 2; ++i) {
+        auto& sd = m_xyScrollData[i];
+        if (!sd.currentAnimationOpt.has_value())
+            continue;
+
+        auto& anim = sd.currentAnimationOpt.value();
+        anim.elapsed += dt;
+
+        const float t = std::clamp(anim.elapsed / kScrollAnimDuration, 0.0f, 1.0f);
+        setPos(fontSize, anim.startPos + (anim.targetPos - anim.startPos) * static_cast<double>(t), i);
+
+        if (t >= 1.0f)
+            sd.currentAnimationOpt.reset();
+    }
+}
+
+void TextView::animateTo(const ImVec2 &fontSize, const double targetPos, const int idx) {
+    auto& scrollData = m_xyScrollData[idx];
+
+    const double startPos = getCurrentPos(fontSize, idx);
+    const double clampedTarget = std::max(0.0, targetPos);
+    if (std::abs(clampedTarget - startPos) < 0.5) {
+        scrollData.currentAnimationOpt.reset();
+        setPos(fontSize, clampedTarget, idx);
+        return;
+    }
+
+    auto& anim = scrollData.currentAnimationOpt.emplace();
+    anim.startPos = startPos;
+    anim.targetPos = clampedTarget;
+    anim.elapsed = 0.0f;
 }

@@ -8,7 +8,7 @@ class Win32App;
 
 class Ui {
 public:
-    explicit Ui(const Win32App& app);
+    Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt);
     ~Ui();
 
     Ui(const Ui&) = delete;

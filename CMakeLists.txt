@@ -14,11 +14,27 @@ target_sources(IMGUI PRIVATE
         ${IMGUI_DIR}/imgui_draw.cpp
         ${IMGUI_DIR}/imgui_tables.cpp
         ${IMGUI_DIR}/imgui_widgets.cpp
+        ${IMGUI_DIR}/misc/freetype/imgui_freetype.cpp
         ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
         ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
 )
 target_include_directories(IMGUI PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
-target_link_libraries(IMGUI PUBLIC d3d11 dxgi d3dcompiler)
+
+# use freetype in ImGui
+include(FetchContent)
+FetchContent_Declare(freetype
+        GIT_REPOSITORY https://github.com/freetype/freetype.git
+        GIT_TAG VER-2-14-3
+        GIT_SHALLOW TRUE
+)
+set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_PNG ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BROTLI ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(freetype)
+
+target_link_libraries(IMGUI PUBLIC d3d11 dxgi d3dcompiler freetype)
 target_compile_definitions(IMGUI PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
 # App

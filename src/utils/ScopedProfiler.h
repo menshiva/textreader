@@ -1,7 +1,5 @@
 ﻿#pragma once
 
-#include <chrono>
-
 class ScopedProfiler {
 public:
     explicit ScopedProfiler(const char* name) : m_Name(name), m_Start(std::chrono::steady_clock::now()) {}

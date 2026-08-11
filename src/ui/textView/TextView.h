@@ -16,49 +16,61 @@ public:
     TextView& operator=(TextView&&) = delete;
 
     struct Source {
-        std::function<uint64_t()> getLineCount;
-        std::function<std::string_view(uint64_t)> getLine;
+        std::function<std::string_view(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols)> getLine;
+        uint64_t maxNum[2];
     };
-    void draw(const Source& source);
-
-    void reset();
+    void reset(Source source = Source{nullptr, {0, 0}});
+    void draw();
 private:
     struct LayoutData {
-        uint64_t fullVisibleLinesNum;
-        float lineRemainderHeight;
-        uint64_t reservedLinesNum;
+        struct FontMetrics {
+            float visibleNumFlt;
 
-        ImRect gutterRegion;
+            uint64_t fullVisibleNum;
+            float remainder;
 
-        struct VerticalScrollbarData {
+            uint64_t reservedNum; // fullVisibleNum + (remainder > 0.0f)
+        };
+        FontMetrics xyMetrics[2];
+
+        struct GutterData {
+            ImRect region;
+        } gutterData;
+
+        struct ScrollbarData {
             ImRect region;
             double maxPos;
-            float grabHeight;
+            float grab;
             float travel;
         };
+        std::optional<ScrollbarData> xyScrollbarData[2];
 
         struct TextViewData {
             ImRect region;
-            uint64_t visibleCharsNum;
-
-            std::optional<VerticalScrollbarData> verticalScrollbarData;
         };
         std::optional<TextViewData> textViewData;
     };
-    LayoutData computeLayoutData(float charWidth, float lineHeight, uint64_t sourceTotalLinesNum) const;
+    bool computeLayoutData(
+        const ImVec2& windowRegionMin, const ImVec2& windowRegionSize, const ImVec2& fontSize,
+        uint64_t sourceMaxLineLength, uint64_t sourceMaxLinesNum,
+        LayoutData& outData
+    ) const;
 
-    void clampTextOffsets(float lineHeight, const LayoutData& layoutData, uint64_t sourceTotalLinesNum);
+    struct ScrollData {
+        uint64_t firstIdx = 0;
+        float pixelOffsetRemainder = 0.0f;
+        std::optional<float> scrollbarDragOffset;
+    };
 
-    float computeScrollbarGrabY(const LayoutData::VerticalScrollbarData& verticalScrollbarData, float lineHeight) const;
+    void clampScrollData(const ImVec2& fontSize, const LayoutData& layoutData, uint64_t sourceMax, int idx);
+    float computeScrollbarGrab(const ImVec2& fontSize, const LayoutData::ScrollbarData& scrollBarData, int idx) const;
 
-    bool handleScrollbarInput(const LayoutData::TextViewData& textViewData, float lineHeight);
-    void handleMouseWheelInput(float dy, float lineHeight);
-    void handleInput(const LayoutData::TextViewData& textViewData, float lineHeight);
+    bool handleScrollbarInput(const LayoutData& layoutData, const ImVec2& fontSize);
+    void scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, int idx);
+    void handleInput(const LayoutData& layoutData, const ImVec2& fontSize);
 
-    uint64_t m_FirstLineIdx = 0;
-    float m_VerticalPixelOffset = 0.0f;
-
-    std::optional<float> m_VerticalScrollbarDragOffset;
+    Source m_Source;
+    ScrollData m_xyScrollData[2];
 
     static constexpr float kGutterTextHorizontalPadding = 4.0f;
     static constexpr uint64_t kGutterMinDigitsNum = 3;
@@ -66,7 +78,8 @@ private:
 
     static constexpr float kTextViewLeftPadding = 8.0f;
     static constexpr float kVerticalLinesPerWheelScroll = 3.0f;
+    static constexpr float kHorizontalCharsPerWheelScroll = 8.0f;
 
-    static constexpr float kScrollbarWidth = 10.0f;
-    static constexpr float kScrollbarMinGrabHeight = 24.0f;
+    static constexpr float kScrollbarSize = 10.0f;
+    static constexpr float kScrollbarMinGrabSize = 24.0f;
 };

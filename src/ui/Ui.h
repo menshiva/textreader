@@ -1,6 +1,5 @@
 ﻿#pragma once
 
-#include <functional>
 #include <memory>
 #include "../controller/Commands.h"
 #include "textView/TextView.h"
@@ -24,8 +23,8 @@ public:
     void build();
     static void render();
 
-    void setTextViewSource(TextView::Source source) { m_TextViewSource = std::move(source); }
-    void setFileOpen(bool open);
+    void setFileOpened(TextView::Source source);
+    void setFileClosed();
 
     void showErrorMsg(std::string msg) { m_ErrorMsg = std::move(msg); }
 private:
@@ -49,9 +48,8 @@ private:
 
     CommandHandler m_SendCommand;
 
-    TextView::Source m_TextViewSource;
-    TextView m_TextView;
     bool m_FileOpen = false;
+    TextView m_TextView;
 
     std::string m_ErrorMsg;
 };

@@ -143,7 +143,7 @@ void Win32App::setWindowTitle(const std::optional<const wchar_t*>& titleOpt) con
 std::optional<std::filesystem::path> Win32App::showTextFileDialog(const bool open) const {
     constexpr static COMDLG_FILTERSPEC kFilters[] = {
         {L"Text files (*.txt)", L"*.txt"},
-        // {L"All files (*.*)", L"*.*"}
+        {L"All files (*.*)", L"*.*"}
     };
 
     Microsoft::WRL::ComPtr<IFileDialog> dlg;

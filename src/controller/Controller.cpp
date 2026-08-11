@@ -5,14 +5,9 @@
 
 Controller::Controller(Win32App &app, Ui& ui) : m_App(app), m_Ui(ui), m_LineIndexer(m_File) {
     m_Ui.setCommandHandler(std::bind(&Controller::process, this, std::placeholders::_1));
-    m_Ui.setTextViewSource({
-        std::bind(&Controller::getLineCountImpl, this),
-        std::bind(&Controller::getLineImpl, this, std::placeholders::_1),
-    });
 }
 
 Controller::~Controller() {
-    m_Ui.setTextViewSource({});
     m_Ui.setCommandHandler(nullptr);
     closeFileImpl(true);
 }
@@ -67,12 +62,8 @@ bool Controller::isReadingFromTmp() const {
     return m_File.getPath() == m_App.getTmpTextFilePath();
 }
 
-std::string_view Controller::getLineImpl(const uint64_t i) const {
-    return m_LineIndexer.get(i);
-}
-
-uint64_t Controller::getLineCountImpl() const {
-    return m_LineIndexer.count();
+std::string_view Controller::getTextDataImpl(const uint64_t lineIdx, const uint64_t fromCol, const uint64_t maxCols) const {
+    return m_LineIndexer.get(lineIdx, fromCol, maxCols);
 }
 
 bool Controller::openFileImpl(const std::filesystem::path& path) {
@@ -90,14 +81,17 @@ bool Controller::openFileImpl(const std::filesystem::path& path) {
 
     const auto fileName = path.filename();
     m_App.setWindowTitle(fileName.c_str());
-    m_Ui.setFileOpen(true);
+    m_Ui.setFileOpened({
+        std::bind(&Controller::getTextDataImpl, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
+        {m_LineIndexer.maxLineLength(), m_LineIndexer.count()}
+    });
 
     return true;
 }
 
 void Controller::closeFileImpl(const bool removeTmp) {
     m_App.setWindowTitle(std::nullopt);
-    m_Ui.setFileOpen(false);
+    m_Ui.setFileClosed();
 
     const bool wasReadingTmp = isReadingFromTmp();
     m_LineIndexer.clear();

@@ -4,7 +4,7 @@
 #include "imgui_internal.h"
 #include "../app/Win32App.h"
 
-Ui::Ui(const Win32App& app) {
+Ui::Ui(const Win32App& app) : m_TextView() {
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -75,7 +75,8 @@ void Ui::build() {
         );
         ImGui::PopStyleVar();
 
-        m_TextView.draw(m_TextViewSource);
+        if (m_FileOpen)
+            m_TextView.draw();
 
         // menu bar
         bool openGenText = false;
@@ -257,9 +258,14 @@ void Ui::render() {
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 }
 
-void Ui::setFileOpen(const bool open) {
-    m_FileOpen = open;
+void Ui::setFileOpened(TextView::Source source) {
+    m_TextView.reset(std::move(source));
+    m_FileOpen = true;
+}
+
+void Ui::setFileClosed() {
     m_TextView.reset();
+    m_FileOpen = false;
 }
 
 Ui::ProgressPopupRAII::ProgressPopupRAII(ProgressPopupData* dataPtr) : m_DataPtr(dataPtr) {}

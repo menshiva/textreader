@@ -1,7 +1,6 @@
 ﻿#pragma once
 
 #include <filesystem>
-#include <cstdint>
 #include <windows.h>
 
 class FileWriter {

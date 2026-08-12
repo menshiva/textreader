@@ -11,8 +11,8 @@ public:
 
     FileMapping(const FileMapping&) = delete;
     FileMapping& operator=(const FileMapping&) = delete;
-    FileMapping(FileMapping&&) = delete;
-    FileMapping& operator=(FileMapping&&) = delete;
+    FileMapping(FileMapping&&) = default;
+    FileMapping& operator=(FileMapping&&) = default;
 
     bool open(const std::filesystem::path& path);
     void close();

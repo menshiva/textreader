@@ -9,19 +9,18 @@ static uint32_t utf8SeqLen(const unsigned char c) {
     return 1;
 }
 
-LineIndexer::LineIndexer(FileMapping& file) : m_File(file) {}
-
-void LineIndexer::build() {
+void LineIndexer::build(FileMapping& file) {
     clear();
 
-    const uint64_t fileSize = m_File.getSize();
+    const uint64_t fileSize = file.getSize();
     if (fileSize == 0)
         return;
+    m_FilePtr = &file;
 
     uint64_t contentStart = 0;
     {
         // handle BOM
-        const auto head = m_File.view(0, 3);
+        const auto head = m_FilePtr->view(0, 3);
         if (head.size() >= 3 && static_cast<unsigned char>(head[0]) == 0xEF
             && static_cast<unsigned char>(head[1]) == 0xBB && static_cast<unsigned char>(head[2]) == 0xBF)
         {
@@ -35,7 +34,7 @@ void LineIndexer::build() {
     uint64_t pos = contentStart;
 
     while (pos < fileSize) {
-        const auto chunk = m_File.view(pos, kScanChunkBytes);
+        const auto chunk = m_FilePtr->view(pos, kScanChunkBytes);
         if (chunk.empty())
             break;
 
@@ -92,12 +91,12 @@ std::string_view LineIndexer::get(const uint64_t lineIdx, const uint64_t fromCol
     if (lineIdx >= count())
         return {};
 
-    const uint64_t fileSize = m_File.getSize();
+    const uint64_t fileSize = m_FilePtr->getSize();
     const uint64_t start = m_LineOffsets[lineIdx];
     const uint64_t end = lineIdx + 1 < count() ? m_LineOffsets[lineIdx + 1] : fileSize;
 
     const size_t want = std::min<uint64_t>(end - start, kMaxLineBytes);
-    const auto raw = m_File.view(start, want);
+    const auto raw = m_FilePtr->view(start, want);
     if (raw.empty())
         return {};
 

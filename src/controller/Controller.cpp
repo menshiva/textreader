@@ -3,36 +3,45 @@
 #include "../utils/ScopedProfiler.h"
 #include "file/FileWriter.h"
 
-Controller::Controller(Win32App &app, Ui& ui) : m_App(app), m_Ui(ui), m_LineIndexer(m_File) {
+Controller::Controller(Win32App &app, Ui& ui) : m_App(app), m_Ui(ui) {
     m_Ui.setCommandHandler(std::bind(&Controller::process, this, std::placeholders::_1));
 }
 
 Controller::~Controller() {
+    m_OpenTask.cancelled.store(true, std::memory_order_release);
+    if (m_OpenTask.thread.joinable())
+        m_OpenTask.thread.join();
     m_TextGenerationTask.cancelled.store(true, std::memory_order_release);
     if (m_TextGenerationTask.thread.joinable())
         m_TextGenerationTask.thread.join();
-    m_SaveAsTask.cancelled.store(true, std::memory_order_release);
-    if (m_SaveAsTask.thread.joinable())
-        m_SaveAsTask.thread.join();
+    m_SaveTask.cancelled.store(true, std::memory_order_release);
+    if (m_SaveTask.thread.joinable())
+        m_SaveTask.thread.join();
 
     m_Ui.setCommandHandler(nullptr);
     closeFileImpl(true);
 }
 
 void Controller::tick() {
+    if (m_OpenTask.isRunning() && m_OpenTask.isFinished())
+        endOpenFileImpl();
     if (m_TextGenerationTask.isRunning() && m_TextGenerationTask.isFinished())
         endGenFileImpl();
-    if (m_SaveAsTask.isRunning() && m_SaveAsTask.isFinished())
-        endSaveAsImpl();
+    if (m_SaveTask.isRunning() && m_SaveTask.isFinished())
+        endSaveFileImpl();
 }
 
 bool Controller::operator()(const cmd::Cancel&) {
+    if (m_OpenTask.isRunning()) {
+        m_OpenTask.cancel();
+        return true;
+    }
     if (m_TextGenerationTask.isRunning()) {
         m_TextGenerationTask.cancel();
         return true;
     }
-    if (m_SaveAsTask.isRunning()) {
-        m_SaveAsTask.cancel();
+    if (m_SaveTask.isRunning()) {
+        m_SaveTask.cancel();
         return true;
     }
     return false;
@@ -44,7 +53,7 @@ bool Controller::operator()(const cmd::OpenFile&) {
 
     const auto filePathOpt = m_App.showTextFileDialog(true);
     if (filePathOpt.has_value())
-        return openFileImpl(filePathOpt.value());
+        return startOpenFileImpl(filePathOpt.value());
 
     return false;
 }
@@ -76,7 +85,7 @@ bool Controller::operator()(const cmd::SaveAs&) {
 
     const auto filePathOpt = m_App.showTextFileDialog(false);
     if (filePathOpt.has_value())
-        return startSaveAsImpl(filePathOpt.value());
+        return startSaveFileImpl(filePathOpt.value());
 
     return false;
 }
@@ -89,7 +98,7 @@ bool Controller::operator()(const cmd::Close&) {
 }
 
 bool Controller::isBusy() const {
-    return m_TextGenerationTask.isRunning() || m_SaveAsTask.isRunning();
+    return m_OpenTask.isRunning() || m_TextGenerationTask.isRunning() || m_SaveTask.isRunning();
 }
 
 bool Controller::isReadingFromTmp() const {
@@ -103,29 +112,59 @@ std::string_view Controller::getTextDataImpl(
     return m_LineIndexer.get(lineIdx, fromCol, maxCols, outLineTotalLength);
 }
 
-bool Controller::openFileImpl(const std::filesystem::path& path) {
-    if (path == m_File.getPath())
+bool Controller::startOpenFileImpl(const std::filesystem::path& path) {
+    m_OpenTask.reset();
+    m_OpenTask.progress = m_Ui.acquireProgressPopup("Indexing", true);
+    if (!m_OpenTask.progress) {
+        m_Ui.showErrorMsg("Already busy");
         return false;
+    }
 
-    const bool wasReadingTmp = isReadingFromTmp();
+    // TODO
+
+    m_OpenTask.wasReadingTmp = isReadingFromTmp();
     if (!m_File.open(path)) {
         m_Ui.showErrorMsg("Cannot open the file");
         return false;
     }
-    m_LineIndexer.build();
+    m_Ui.setFileClosed();
+    m_LineIndexer.clear();
+
+    m_OpenTask.thread = std::jthread([taskPtr = &m_OpenTask, filePtr = &m_File] {
+        taskPtr->newLineIndexer.build(*filePtr);
+        // TODO: handle cancel and errors
+        taskPtr->result = AsyncTask::Result::Success;
+        taskPtr->finish();
+    });
+
+    return true;
+}
+
+void Controller::endOpenFileImpl() {
+    if (!m_OpenTask.isRunning())
+        return;
+
+    if (m_OpenTask.thread.joinable())
+        m_OpenTask.thread.join();
+
+    const bool wasReadingTmp = m_OpenTask.wasReadingTmp;
+    auto newIndexer = std::move(m_OpenTask.newLineIndexer);
+    m_OpenTask.reset();
+
+    // TODO: handle cancel and errors
+
     if (wasReadingTmp) {
         std::error_code ec;
         std::filesystem::remove(m_App.getTmpTextFilePath(), ec);
     }
+    m_LineIndexer = std::move(newIndexer);
 
-    const auto fileName = path.filename();
+    const auto fileName = m_File.getPath().filename();
     m_App.setWindowTitle(fileName.c_str());
     m_Ui.setFileOpened({
         std::bind(&Controller::getTextDataImpl, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4),
         {m_LineIndexer.maxLineLength(), m_LineIndexer.count()}
     });
-
-    return true;
 }
 
 void Controller::closeFileImpl(const bool removeTmp) {
@@ -283,7 +322,7 @@ void Controller::endGenFileImpl() {
     }
 
     if (result == AsyncTask::Result::Success) {
-        openFileImpl(tmpFilePath);
+        startOpenFileImpl(tmpFilePath);
         return;
     }
 
@@ -315,7 +354,7 @@ static DWORD CALLBACK copyProgressRoutine(
     return PROGRESS_CONTINUE;
 }
 
-bool Controller::startSaveAsImpl(const std::filesystem::path& targetPath) {
+bool Controller::startSaveFileImpl(const std::filesystem::path& targetPath) {
     const auto& sourcePath = m_File.getPath();
 
     std::error_code ec;
@@ -326,20 +365,20 @@ bool Controller::startSaveAsImpl(const std::filesystem::path& targetPath) {
         }
     }
 
-    m_SaveAsTask.reset();
-    m_SaveAsTask.progress = m_Ui.acquireProgressPopup("Saving", false);
-    if (!m_SaveAsTask.progress) {
+    m_SaveTask.reset();
+    m_SaveTask.progress = m_Ui.acquireProgressPopup("Saving", false);
+    if (!m_SaveTask.progress) {
         m_Ui.showErrorMsg("Already busy");
         return false;
     }
-    m_SaveAsTask.targetPath = targetPath;
+    m_SaveTask.targetPath = targetPath;
 
-    m_SaveAsTask.thread = std::jthread([taskPtr = &m_SaveAsTask, source = sourcePath, target = targetPath] {
+    m_SaveTask.thread = std::jthread([taskPtr = &m_SaveTask, sourcePath, targetPath] {
         BOOL cancelFlag = FALSE;
 
         CopyProgressData data{taskPtr, &cancelFlag};
         const BOOL ok = CopyFileExW(
-            source.c_str(), target.c_str(),
+            sourcePath.c_str(), targetPath.c_str(),
             &copyProgressRoutine, &data, &cancelFlag,
             0
         );
@@ -360,19 +399,19 @@ bool Controller::startSaveAsImpl(const std::filesystem::path& targetPath) {
     return true;
 }
 
-void Controller::endSaveAsImpl() {
-    if (!m_SaveAsTask.isRunning())
+void Controller::endSaveFileImpl() {
+    if (!m_SaveTask.isRunning())
         return;
 
-    if (m_SaveAsTask.thread.joinable())
-        m_SaveAsTask.thread.join();
+    if (m_SaveTask.thread.joinable())
+        m_SaveTask.thread.join();
 
-    const auto result = m_SaveAsTask.result;
-    const auto targetPath = std::move(m_SaveAsTask.targetPath);
-    m_SaveAsTask.reset();
+    const auto result = m_SaveTask.result;
+    const auto targetPath = std::move(m_SaveTask.targetPath);
+    m_SaveTask.reset();
 
     if (result == AsyncTask::Result::Success) {
-        openFileImpl(targetPath);
+        startOpenFileImpl(targetPath);
         return;
     }
     if (result == AsyncTask::Result::Failed)

@@ -31,14 +31,16 @@ private:
 
     std::string_view getTextDataImpl(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols, uint64_t& outLineTotalLength) const;
 
-    bool openFileImpl(const std::filesystem::path& path);
+    bool startOpenFileImpl(const std::filesystem::path& path);
+    void endOpenFileImpl();
+
     void closeFileImpl(bool removeTmp);
 
     bool startGenFileImpl(uint64_t targetBytes, uint64_t targetLines);
     void endGenFileImpl();
 
-    bool startSaveAsImpl(const std::filesystem::path& targetPath);
-    void endSaveAsImpl();
+    bool startSaveFileImpl(const std::filesystem::path& targetPath);
+    void endSaveFileImpl();
 
     Win32App& m_App;
     Ui& m_Ui;
@@ -68,6 +70,11 @@ public:
         void reset();
     };
 private:
+    struct OpenTask : AsyncTask {
+        bool wasReadingTmp;
+        LineIndexer newLineIndexer;
+    } m_OpenTask;
+
     struct TextGenerationTask : AsyncTask {
         static constexpr size_t kFileWriteBuffSize = 1ull << 20; // 1 mb
 
@@ -76,7 +83,7 @@ private:
         static constexpr size_t kGenPoolSize = 64ull << 10; // 64 kb
     } m_TextGenerationTask;
 
-    struct FileCopyTask : AsyncTask {
+    struct SaveTask : AsyncTask {
         std::filesystem::path targetPath;
-    } m_SaveAsTask;
+    } m_SaveTask;
 };

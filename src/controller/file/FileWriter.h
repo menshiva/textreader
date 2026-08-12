@@ -9,8 +9,8 @@ public:
 
     FileWriter(const FileWriter&) = delete;
     FileWriter& operator=(const FileWriter&) = delete;
-    // FileWriter(FileWriter&&) = delete;
-    // FileWriter& operator=(FileWriter&&) = delete;
+    FileWriter(FileWriter&&) = default;
+    FileWriter& operator=(FileWriter&&) = default;
 
     static std::unique_ptr<FileWriter> open(const std::filesystem::path& path, size_t bufferSize, uint64_t preallocBytes = 0);
 

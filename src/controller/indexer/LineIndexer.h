@@ -7,22 +7,22 @@ class FileMapping;
 
 class LineIndexer {
 public:
-    explicit LineIndexer(FileMapping& file);
+    LineIndexer() = default;
     ~LineIndexer() = default;
 
     LineIndexer(const LineIndexer&) = delete;
     LineIndexer& operator=(const LineIndexer&) = delete;
-    LineIndexer(LineIndexer&&) = delete;
-    LineIndexer& operator=(LineIndexer&&) = delete;
+    LineIndexer(LineIndexer&&) = default;
+    LineIndexer& operator=(LineIndexer&&) = default;
 
-    void build();
+    void build(FileMapping& file);
     void clear();
 
     std::string_view get(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols, uint64_t& outLineTotalLength) const;
     uint64_t count() const { return m_LineOffsets.size(); }
     uint64_t maxLineLength() const { return m_MaxLineLength; }
 private:
-    FileMapping& m_File;
+    FileMapping* m_FilePtr;
 
     std::vector<uint64_t> m_LineOffsets; // byte offset for each line
     uint64_t m_MaxLineLength = 0;

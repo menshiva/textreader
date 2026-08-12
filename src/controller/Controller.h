@@ -26,6 +26,7 @@ public:
     bool operator()(const cmd::SaveAs&);
     bool operator()(const cmd::Close&);
 private:
+    bool isBusy() const;
     bool isReadingFromTmp() const;
 
     std::string_view getTextDataImpl(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols, uint64_t& outLineTotalLength) const;
@@ -36,22 +37,46 @@ private:
     bool startGenFileImpl(uint64_t targetBytes, uint64_t targetLines);
     void endGenFileImpl();
 
+    bool startSaveAsImpl(const std::filesystem::path& targetPath);
+    void endSaveAsImpl();
+
     Win32App& m_App;
     Ui& m_Ui;
 
     FileMapping m_File;
     LineIndexer m_LineIndexer;
-
-    struct TextGenerationData {
-        std::jthread thread;
+public:
+    struct AsyncTask {
         std::unique_ptr<Ui::ProgressPopupRAII> progress;
-        bool failed = false;
-        std::atomic<bool> done = false;
 
+        std::atomic<bool> cancelled{false};
+        std::atomic<bool> finished{false};
+
+        enum class Result : uint8_t {
+            None, Success, Failed, Cancelled
+        } result = Result::None;
+
+        std::jthread thread;
+
+        bool isRunning() const { return !!progress; }
+
+        void cancel();
+
+        void finish() { finished.store(true, std::memory_order_release); }
+        bool isFinished() const { return finished.load(std::memory_order_acquire); }
+
+        void reset();
+    };
+private:
+    struct TextGenerationTask : AsyncTask {
         static constexpr size_t kFileWriteBuffSize = 1ull << 20; // 1 mb
 
         static constexpr char kGenAlphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .";
         static constexpr uint32_t kGenLineLen = 1024;
         static constexpr size_t kGenPoolSize = 64ull << 10; // 64 kb
-    } m_TextGenerationData;
+    } m_TextGenerationTask;
+
+    struct FileCopyTask : AsyncTask {
+        std::filesystem::path targetPath;
+    } m_SaveAsTask;
 };

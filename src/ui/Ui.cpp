@@ -58,7 +58,7 @@ void Ui::newFrame() {
 }
 
 void Ui::build() {
-    const ImGuiIO& io = ImGui::GetIO();
+    auto& io = ImGui::GetIO();
 
     {
         const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
@@ -102,6 +102,29 @@ void Ui::build() {
                 ImGui::EndMenu();
             }
             ImGui::EndMenuBar();
+        }
+
+        // shortcuts
+        {
+            if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && !ImGui::IsAnyItemActive()) {
+                if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O)) {
+                    io.ClearInputKeys();
+                    sendAndExecCommand(cmd::OpenFile());
+                }
+                if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_U)) {
+                    io.ClearInputKeys();
+                    sendAndExecCommand(cmd::OpenUrl());
+                }
+                if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_G))
+                    openGenText = true;
+
+                if (m_FileOpen) {
+                    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S)) {
+                        io.ClearInputKeys();
+                        sendAndExecCommand(cmd::SaveAs());
+                    }
+                }
+            }
         }
 
         // modal opening
@@ -160,7 +183,7 @@ void Ui::build() {
                 if (genButtonDisabled)
                     ImGui::EndDisabled();
 
-                if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0)))
+                if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
                     ImGui::CloseCurrentPopup();
 
                 ImGui::EndPopup();
@@ -174,13 +197,16 @@ void Ui::build() {
                 if (m_ProgressPopupData.name) {
                     float fraction;
                     char buf[64];
-                    if (m_ProgressPopupData.infinite) {
-                        fraction = -FLT_MIN;
-                        ImFormatString(buf, IM_COUNTOF(buf), "%s...", m_ProgressPopupData.name);
-                    }
-                    else {
+                    if (!m_ProgressPopupData.infinite && !m_ProgressPopupData.cancelled) {
                         fraction = m_ProgressPopupData.progress.load(std::memory_order_relaxed);
                         ImFormatString(buf, IM_COUNTOF(buf), "%s: %.0f%%", m_ProgressPopupData.name, fraction * 100 + 0.01f);
+                    }
+                    else {
+                        fraction = -static_cast<float>(ImGui::GetTime());
+                        if (!m_ProgressPopupData.cancelled)
+                            ImFormatString(buf, IM_COUNTOF(buf), "%s...", m_ProgressPopupData.name);
+                        else
+                            ImFormatString(buf, IM_COUNTOF(buf), "Cancelling...");
                     }
                     ImGui::ProgressBar(fraction, ImVec2(0.0f, 0.0f), buf);
 
@@ -188,8 +214,15 @@ void Ui::build() {
                     ImGui::Separator();
                     ImGui::Spacing();
 
+                    bool __beginDisabledCalled = false; // fix when m_ProgressPopupData.cancelled becomes true after sendAndExecCommand(cmd::Cancel());
+                    if (m_ProgressPopupData.cancelled) {
+                        ImGui::BeginDisabled();
+                        __beginDisabledCalled = true;
+                    }
                     if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)))
                         sendAndExecCommand(cmd::Cancel());
+                    if (__beginDisabledCalled && m_ProgressPopupData.cancelled)
+                        ImGui::EndDisabled();
                 }
                 else {
                     ImGui::CloseCurrentPopup();
@@ -276,12 +309,17 @@ void Ui::ProgressPopupRAII::setProgressTS(const float val) const {
     m_DataPtr->progress.store(val, std::memory_order_relaxed);
 }
 
+void Ui::ProgressPopupRAII::setCancelled() const {
+    m_DataPtr->cancelled = true;
+}
+
 std::unique_ptr<Ui::ProgressPopupRAII> Ui::acquireProgressPopup(const char *name, const bool infinite) {
     if (m_ProgressPopupData.name)
         return nullptr;
 
     m_ProgressPopupData.name = name;
     m_ProgressPopupData.infinite = infinite;
+    m_ProgressPopupData.cancelled = false;
     if (!m_ProgressPopupData.infinite)
         m_ProgressPopupData.progress.store(0.0f, std::memory_order_relaxed);
 

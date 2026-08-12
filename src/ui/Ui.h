@@ -31,6 +31,7 @@ private:
     struct ProgressPopupData {
         const char* name = nullptr;
         bool infinite = false;
+        bool cancelled = false;
         std::atomic<float> progress{0.0f};
     } m_ProgressPopupData;
 public:
@@ -39,6 +40,7 @@ public:
         ~ProgressPopupRAII();
 
         void setProgressTS(float val) const;
+        void setCancelled() const;
     private:
         ProgressPopupData* m_DataPtr;
     };

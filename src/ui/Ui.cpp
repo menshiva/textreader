@@ -4,8 +4,6 @@
 #include "../app/Win32App.h"
 
 Ui::Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt) {
-    // TODO: outErrorMsgOpt
-
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -325,14 +323,6 @@ void Ui::build() {
         }
 
         ImGui::End();
-    }
-
-    // TODO: remove
-    {
-        static bool show_demo_window = true;
-        // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
-        if (show_demo_window)
-            ImGui::ShowDemoWindow(&show_demo_window);
     }
 }
 

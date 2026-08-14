@@ -23,7 +23,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     Controller controller(app, ui);
 
-    // TODO
+    // TODO: remove
 // #ifdef _DEBUG
     AllocConsole();
     FILE* dummy;

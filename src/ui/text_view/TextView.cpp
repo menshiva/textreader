@@ -60,8 +60,7 @@ void TextView::draw() {
             if (lineNo >= sourceTextSize[1])
                 break;
 
-            // TODO: sub-pixel needed?
-            const float y = std::floor(gutterRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[1].pixelOffsetRemainder);
+            const float y = gutterRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[1].pixelOffsetRemainder;
 
             char buf[24];
             const auto res = std::to_chars(buf, buf + sizeof(buf), lineNo + 1);
@@ -72,7 +71,7 @@ void TextView::draw() {
                 disabledTextColor, buf, buf + len
             );
 
-            const float sepY = std::floor(y + fontSize.y) - 0.5f; // -0.5f shifts line a little bit so that lines themselves look centered
+            const float sepY = std::floor(y + fontSize.y) - 0.5f; // sub-pixel snap + -0.5f shifts line a little bit so that lines themselves look centered
             dl->AddLine(
                 ImVec2(gutterRegion.Min.x, sepY), ImVec2(gutterRegion.Max.x, sepY),
                 separatorCol, kGutterLineThickness
@@ -125,8 +124,7 @@ void TextView::draw() {
             if (lineNo >= sourceTextSize[1])
                 break;
 
-            // TODO: sub-pixel needed?
-            const float y = std::floor(textViewRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[1].pixelOffsetRemainder);
+            const float y = textViewRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[1].pixelOffsetRemainder;
 
             uint64_t totalLineLength = 0;
             const auto s = m_Source.getLine(lineNo, m_xyScrollData[0].firstIdx, layoutData.xyMetrics[0].reservedNum + 1, totalLineLength);

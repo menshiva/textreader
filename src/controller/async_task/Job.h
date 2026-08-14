@@ -11,7 +11,7 @@ public:
     using OnDone = std::function<void(std::optional<std::string> errorOpt, bool wasCancelled)>;
 
     Job() = default;
-    ~Job() = default; // TODO: should we call m_Alive = false???
+    ~Job() = default;
 
     Job(const Job&) = delete;
     Job& operator=(const Job&) = delete;

@@ -2,6 +2,7 @@
 
 #include <d3d11.h>
 #include <filesystem>
+#include <functional>
 #include "imgui.h"
 
 class Win32App {
@@ -19,6 +20,15 @@ public:
     void bindAndClear(const ImVec4& clearColor) const;
     void present(bool vsync);
     void queueResize(UINT w, UINT h);
+
+    // While the user drags the border or the caption, Windows runs its own message loop inside
+    // DefWindowProc and DispatchMessage does not return until the drag ends - so the main loop
+    // stops and the content freezes. Handing the frame over as a callback lets the window
+    // procedure keep drawing from inside that loop.
+    using FrameCallback = std::function<void()>;
+    void setFrameCallback(FrameCallback callback) { m_FrameCallback = std::move(callback); }
+    void runFrame();
+    void setInResizeMoveLoop(const bool inLoop) { m_InResizeMoveLoop = inLoop; }
 
     float getDpiScale() const { return m_WindowData.dpiScale; }
     HWND hwnd() const { return m_WindowData.hwnd; }
@@ -50,6 +60,10 @@ private:
 
         bool shouldClose = false;
     } m_WindowData;
+
+    FrameCallback m_FrameCallback;
+    bool m_InFrame = false; // guards against a WM_TIMER / WM_SIZE frame
+    bool m_InResizeMoveLoop = false;
 
     struct D3D11Data {
         ID3D11Device* device = nullptr;

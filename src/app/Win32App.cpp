@@ -15,6 +15,8 @@ static LRESULT WINAPI WndProc(const HWND hWnd, const UINT msg, const WPARAM wPar
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
         return true;
 
+    static constexpr UINT_PTR kResizeMoveLoopTimerId = 1;
+
     auto* self = reinterpret_cast<Win32App*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
     // ReSharper disable once CppDefaultCaseNotHandledInSwitchStatement
     switch (msg) {
@@ -23,9 +25,32 @@ static LRESULT WINAPI WndProc(const HWND hWnd, const UINT msg, const WPARAM wPar
             return 0;
         }
         case WM_SIZE: {
-            if (wParam != SIZE_MINIMIZED && self)
+            if (wParam != SIZE_MINIMIZED && self) {
                 self->queueResize(LOWORD(lParam), HIWORD(lParam));
+                self->runFrame();
+            }
             return 0;
+        }
+        case WM_ERASEBKGND: {
+            // we paint every pixel ourselves
+            return 1;
+        }
+        case WM_ENTERSIZEMOVE: {
+            SetTimer(hWnd, kResizeMoveLoopTimerId, USER_TIMER_MINIMUM, nullptr);
+            if (self)
+                self->setInResizeMoveLoop(true);
+            break;
+        }
+        case WM_TIMER: {
+            if (wParam == kResizeMoveLoopTimerId && self)
+                self->runFrame();
+            break;
+        }
+        case WM_EXITSIZEMOVE: {
+            KillTimer(hWnd, kResizeMoveLoopTimerId);
+            if (self)
+                self->setInResizeMoveLoop(false);
+            break;
         }
         case WM_SYSCOMMAND: {
             if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
@@ -127,22 +152,23 @@ bool Win32App::beginFrame() {
     if (m_WindowData.shouldClose)
         return false;
 
-    // Handle window being minimized or screen locked
-    if (m_D3D11Data.swapChainOccluded && m_D3D11Data.swapChain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED) {
+    // handle window resize
+    if (m_D3D11Data.resizeWidth != 0 && m_D3D11Data.resizeHeight != 0) {
+        CleanupRenderTarget();
+        const HRESULT hr = m_D3D11Data.swapChain->ResizeBuffers(0, m_D3D11Data.resizeWidth, m_D3D11Data.resizeHeight, DXGI_FORMAT_UNKNOWN, 0);
+        CreateRenderTarget();
+        if (SUCCEEDED(hr) && m_D3D11Data.renderTargetView)
+            m_D3D11Data.resizeWidth = m_D3D11Data.resizeHeight = 0;
+    }
+
+    // handle window being minimized or screen locked
+    if (!m_InResizeMoveLoop && m_D3D11Data.swapChainOccluded && m_D3D11Data.swapChain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED) {
         Sleep(10);
         return false;
     }
     m_D3D11Data.swapChainOccluded = false;
 
-    // Handle window resize (we don't resize directly in the WM_SIZE handler)
-    if (m_D3D11Data.resizeWidth != 0 && m_D3D11Data.resizeHeight != 0) {
-        CleanupRenderTarget();
-        (void) m_D3D11Data.swapChain->ResizeBuffers(0, m_D3D11Data.resizeWidth, m_D3D11Data.resizeHeight, DXGI_FORMAT_UNKNOWN, 0);
-        m_D3D11Data.resizeWidth = m_D3D11Data.resizeHeight = 0;
-        CreateRenderTarget();
-    }
-
-    return true;
+    return !!m_D3D11Data.renderTargetView; // nothing to draw into - skip the frame
 }
 
 void Win32App::bindAndClear(const ImVec4& clearColor) const {
@@ -159,6 +185,14 @@ void Win32App::present(const bool vsync) {
 void Win32App::queueResize(const UINT w, const UINT h) {
     m_D3D11Data.resizeWidth = w;
     m_D3D11Data.resizeHeight = h;
+}
+
+void Win32App::runFrame() {
+    if (m_InFrame || !m_FrameCallback)
+        return;
+    m_InFrame = true;
+    m_FrameCallback();
+    m_InFrame = false;
 }
 
 void Win32App::setWindowTitle(const std::optional<const wchar_t*>& titleOpt) const {
@@ -226,7 +260,7 @@ bool Win32App::CreateDeviceD3D() {
     sd.SampleDesc.Count = 1;
     sd.SampleDesc.Quality = 0;
     sd.Windowed = TRUE;
-    sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
     constexpr UINT createDeviceFlags = 0;
     //createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
@@ -267,15 +301,20 @@ void Win32App::CleanupDeviceD3D() {
 }
 
 void Win32App::CreateRenderTarget() {
-    ID3D11Texture2D* pBackBuffer;
-    const auto bufRes = m_D3D11Data.swapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
-    assert(SUCCEEDED(bufRes));
-    const auto createRtvRes = m_D3D11Data.device->CreateRenderTargetView(pBackBuffer, nullptr, &m_D3D11Data.renderTargetView);
-    assert(SUCCEEDED(createRtvRes));
-    pBackBuffer->Release();
+    ID3D11Texture2D* backBuffer = nullptr;
+    if (FAILED(m_D3D11Data.swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer))) || !backBuffer)
+        return;
+
+    if (FAILED(m_D3D11Data.device->CreateRenderTargetView(backBuffer, nullptr, &m_D3D11Data.renderTargetView)))
+        m_D3D11Data.renderTargetView = nullptr;
+
+    backBuffer->Release();
 }
 
 void Win32App::CleanupRenderTarget() {
+    if (m_D3D11Data.context)
+        m_D3D11Data.context->OMSetRenderTargets(0, nullptr, nullptr);
+
     if (m_D3D11Data.renderTargetView) {
         m_D3D11Data.renderTargetView->Release();
         m_D3D11Data.renderTargetView = nullptr;

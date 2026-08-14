@@ -1,5 +1,3 @@
-#include "app/Win32App.h"
-#include "ui/Ui.h"
 #include "controller/Controller.h"
 
 static void fatalError(const std::string& msg) {
@@ -30,9 +28,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     freopen_s(&dummy, "CONOUT$", "w", stdout);
 // #endif
 
-    while (!app.shouldClose()) {
-        app.pollMessages();
-
+    app.setFrameCallback([&app, &ui, &controller] {
         if (app.beginFrame()) {
             ui.newFrame();
             ui.build();
@@ -40,8 +36,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             ui.render();
             app.present(true);
         }
-
         controller.tick();
+    });
+
+    while (!app.shouldClose()) {
+        app.pollMessages();
+        app.runFrame();
     }
 
     return 0;

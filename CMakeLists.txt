@@ -39,7 +39,7 @@ target_compile_definitions(IMGUI PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND
 # App
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 add_executable(TextReader WIN32 ${SOURCES})
-target_link_libraries(TextReader PRIVATE IMGUI)
+target_link_libraries(TextReader PRIVATE IMGUI winhttp)
 target_compile_options(TextReader PRIVATE /utf-8 /W4 /permissive- /Zc:__cplusplus /MP)
 
 # copy fonts

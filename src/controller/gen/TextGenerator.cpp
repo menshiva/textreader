@@ -2,21 +2,6 @@
 #include "../../utils/Random.h"
 #include "../file/FileWriter.h"
 
-std::optional<std::string> textgen::checkDiskSpace(const std::filesystem::path& path, const uint64_t neededBytes) {
-    if (neededBytes == 0)
-        return std::nullopt;
-
-    const auto dir = path.parent_path();
-    ULARGE_INTEGER freeBytes{};
-    if (!GetDiskFreeSpaceExW(dir.c_str(), &freeBytes, nullptr, nullptr))
-        return std::nullopt;
-
-    if (freeBytes.QuadPart >= neededBytes)
-        return std::nullopt;
-
-    return "Not enough free disk space";
-}
-
 std::optional<std::string> textgen::generate(
     FileWriter& writer, const std::stop_token& st, std::atomic<float>& outProgress,
     const uint64_t targetBytes, const uint64_t targetLines
@@ -27,7 +12,7 @@ std::optional<std::string> textgen::generate(
     constexpr static uint32_t kMaxLineLen = 1024;
     constexpr static size_t kPoolSize = 64ull << 10; // pre-made random characters - 64 kb
 
-    XorShift32 rnd;
+    utils::XorShift32 rnd;
 
     // generate random chars
     std::vector<char> pool(kPoolSize);
@@ -52,6 +37,7 @@ std::optional<std::string> textgen::generate(
         while (left > 0) {
             if (p == end && !flushBuffer(percent))
                 return false;
+            // copy random chunk from pool
             const uint32_t chunk = std::min<uint32_t>(static_cast<uint32_t>(end - p), left);
             memcpy(p, pool.data() + rnd.next() % (kPoolSize - kMaxLineLen), chunk);
             p += chunk;

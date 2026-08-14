@@ -3,9 +3,9 @@
 #include "../app/Win32App.h"
 #include "../ui/Ui.h"
 #include "async_task/Job.h"
+#include "net/TextDownloader.h"
 
 class LineIndexer;
-class AsyncTask;
 class FileWriter;
 
 class Controller {
@@ -56,7 +56,9 @@ private:
 
     struct DownloadPayload {
         std::string url;
+        std::filesystem::path targetPath;
         std::unique_ptr<FileWriter> writer;
+        std::unique_ptr<http::ResponseInfo> responseInfo;
     };
     Job<DownloadPayload> m_DownloadJob;
 

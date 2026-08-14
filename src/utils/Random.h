@@ -2,18 +2,20 @@
 
 #include <random>
 
-struct XorShift32 {
-    uint32_t s;
+namespace utils {
+    struct XorShift32 {
+        uint32_t s;
 
-    XorShift32() {
-        std::random_device rd;
-        s = rd() + 1; // avoid zero
-    }
+        XorShift32() {
+            std::random_device rd;
+            s = rd() + 1; // avoid zero
+        }
 
-    uint32_t next() {
-        s ^= s << 13;
-        s ^= s >> 17;
-        s ^= s << 5;
-        return s;
-    }
-};
+        uint32_t next() {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            return s;
+        }
+    };
+}

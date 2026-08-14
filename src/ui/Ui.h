@@ -49,11 +49,10 @@ private:
 
     struct ProgressData {
         std::string name;
-        bool infinite = false;
         std::function<void()> cancelClickCallback = nullptr;
 
         bool cancelled = false;
-        std::atomic<float> progress = 0.0f;
+        std::atomic<float> progress = -1.0f;
     };
     std::list<ProgressData> m_ProgressDataQueue;
 public:
@@ -67,5 +66,5 @@ public:
         std::list<ProgressData>* m_ProgressDataQueuePtr;
         std::list<ProgressData>::iterator m_Iterator;
     };
-    std::unique_ptr<ProgressRAII> pushProgress(std::string name, bool infinite, std::function<void()> cancelClickCallback = nullptr);
+    std::unique_ptr<ProgressRAII> pushProgress(std::string name, std::function<void()> cancelClickCallback = nullptr);
 };

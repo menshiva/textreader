@@ -1,4 +1,5 @@
 ﻿#include "Controller.h"
+#include "../utils/FileUtils.h"
 #include "file/FileWriter.h"
 #include "gen/TextGenerator.h"
 #include "indexer/LineIndexer.h"
@@ -139,7 +140,7 @@ void Controller::startOpenJob(OpenPayload&& payload) {
 
     m_OpenJob.start(
         std::move(payload),
-        m_Ui.pushProgress("Indexing", false),
+        m_Ui.pushProgress("Indexing"),
         &Controller::openJobRoutine,
         [this] (std::optional<std::string> errorOpt, const bool wasCancelled) {
             onOpenJobFinished(std::move(errorOpt), wasCancelled);
@@ -198,13 +199,22 @@ void Controller::downloadImpl(std::string url) {
         return;
     }
 
-    // TODO: writer
+    std::string errorMsg;
+    auto writer = FileWriter::open(tmpFilePath, http::kWriteBufferSize, 0, errorMsg);
+    if (!writer) {
+        m_Ui.showErrorMsg(std::move(errorMsg));
+        return;
+    }
+
     DownloadPayload payload;
     payload.url = std::move(url);
+    payload.targetPath = tmpFilePath;
+    payload.writer = std::move(writer);
+    payload.responseInfo = std::make_unique<http::ResponseInfo>();
 
     m_DownloadJob.start(
         std::move(payload),
-        m_Ui.pushProgress("Downloading", false, [this] { m_DownloadJob.cancel(); }),
+        m_Ui.pushProgress("Downloading", [this] { m_DownloadJob.cancel(); }),
         &Controller::downloadJobRoutine,
         [this] (std::optional<std::string> errorOpt, const bool wasCancelled) {
             onDownloadJobFinished(std::move(errorOpt), wasCancelled);
@@ -213,8 +223,7 @@ void Controller::downloadImpl(std::string url) {
 }
 
 std::optional<std::string> Controller::downloadJobRoutine(const DownloadPayload& d, const std::stop_token& st, std::atomic<float>& progress) {
-    // TODO
-    return std::nullopt;
+    return http::download(*d.writer, st, progress, *d.responseInfo, d.url, d.targetPath);
 }
 
 // ReSharper disable once CppPassValueParameterByConstReference
@@ -266,9 +275,12 @@ void Controller::genImpl(const uint64_t targetBytes, const uint64_t targetLines)
         return;
     }
 
-    if (auto errorOpt = textgen::checkDiskSpace(tmpFilePath, targetBytes)) {
-        m_Ui.showErrorMsg(std::move(*errorOpt));
-        return;
+    if (targetBytes) {
+        // ReSharper disable once CppLocalVariableMayBeConst
+        if (auto errorOpt = utils::checkDiskSpace(tmpFilePath, targetBytes)) {
+            m_Ui.showErrorMsg(std::move(*errorOpt));
+            return;
+        }
     }
 
     std::string errorMsg;
@@ -280,7 +292,7 @@ void Controller::genImpl(const uint64_t targetBytes, const uint64_t targetLines)
 
     m_GenJob.start(
         GenPayload{targetBytes, targetLines, std::move(writer)},
-        m_Ui.pushProgress("Generating", false, [this] { m_GenJob.cancel(); }),
+        m_Ui.pushProgress("Generating", [this] { m_GenJob.cancel(); }),
         &Controller::genJobRoutine,
         [this] (std::optional<std::string> errorOpt, const bool wasCancelled) {
             onGenJobFinished(std::move(errorOpt), wasCancelled);
@@ -340,7 +352,7 @@ void Controller::saveImpl(std::filesystem::path targetPath) {
 
     m_SaveJob.start(
         SavePayload{m_OpenJob.data().path, std::move(targetPath), existedBefore},
-        m_Ui.pushProgress("Saving", false, [this] { m_SaveJob.cancel(); }),
+        m_Ui.pushProgress("Saving", [this] { m_SaveJob.cancel(); }),
         &Controller::saveJobRoutine,
         [this] (std::optional<std::string> errorOpt, const bool wasCancelled) {
             onSaveJobFinished(std::move(errorOpt), wasCancelled);
@@ -428,7 +440,7 @@ void Controller::closeImpl(std::function<void()> deferredFunc) {
 
     m_Ui.setFileClosed();
     m_App.setWindowTitle(std::nullopt);
-    m_OpenJob.clear();
+    m_OpenJob.clear(); // TODO: freezing a bit. can we fix?
 
     if (wasReadingFromTmp)
         removeTmpFiles(true, false);

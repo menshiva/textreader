@@ -1,16 +1,20 @@
 ﻿#pragma once
 
-class ScopedProfiler {
-public:
-    explicit ScopedProfiler(const char* name) : m_Name(name), m_Start(std::chrono::steady_clock::now()) {}
+#include <chrono>
 
-    ~ScopedProfiler() { report(); }
+namespace utils {
+    class ScopedProfiler {
+    public:
+        explicit ScopedProfiler(const char* name) : m_Name(name), m_Start(std::chrono::steady_clock::now()) {}
 
-    void report() const {
-        const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - m_Start).count();
-        printf("[%s] %.1f ms\n", m_Name, ms);
-    }
-private:
-    const char* m_Name;
-    std::chrono::steady_clock::time_point m_Start;
-};
+        ~ScopedProfiler() { report(); }
+
+        void report() const {
+            const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - m_Start).count();
+            printf("[%s] %.1f ms\n", m_Name, ms);
+        }
+    private:
+        const char* m_Name;
+        std::chrono::steady_clock::time_point m_Start;
+    };
+}

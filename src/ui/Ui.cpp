@@ -83,12 +83,13 @@ void Ui::build() {
 
         // menu bar
         bool openGenText = false;
+        bool openUrlPrompt = false;
         if (ImGui::BeginMenuBar()) {
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("Open...", "Ctrl+O"))
                     execCommand(cmd::OpenFile());
                 if (ImGui::MenuItem("From URL...", "Ctrl+U"))
-                    execCommand(cmd::OpenUrl());
+                    openUrlPrompt = true;
                 if (ImGui::MenuItem("Generate...", "Ctrl+G"))
                     openGenText = true;
 
@@ -116,10 +117,8 @@ void Ui::build() {
                     io.ClearInputKeys();
                     execCommand(cmd::OpenFile());
                 }
-                if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_U)) {
-                    io.ClearInputKeys();
-                    execCommand(cmd::OpenUrl());
-                }
+                if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_U))
+                    openUrlPrompt = true;
                 if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_G))
                     openGenText = true;
 
@@ -134,9 +133,10 @@ void Ui::build() {
 
         // modal opening
         {
-            if (openGenText) {
+            if (openGenText)
                 ImGui::OpenPopup("Generate txt");
-            }
+            if (openUrlPrompt)
+                ImGui::OpenPopup("Open from URL");
             if (!m_InfoMsgData.infoMsg.empty())
                 if (!ImGui::IsPopupOpen("##info"))
                     ImGui::OpenPopup("##info");
@@ -150,9 +150,44 @@ void Ui::build() {
         {
             ImGui::SetNextWindowPos(mainViewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
             if (ImGui::BeginPopupModal(
+                "Open from URL", nullptr,
+                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
+            )) {
+                if (ImGui::IsWindowAppearing())
+                    ImGui::SetKeyboardFocusHere();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24.0f);
+
+                static char urlBuf[2048] = "";
+                const bool enter = ImGui::InputTextWithHint("##url", "URL", urlBuf, IM_COUNTOF(urlBuf), ImGuiInputTextFlags_EnterReturnsTrue);
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                const bool openDisabled = urlBuf[0] == '\0';
+                if (openDisabled)
+                    ImGui::BeginDisabled();
+                if (ImGui::Button("Open", ImVec2(-FLT_MIN, 0.0f)) || (enter && !openDisabled)) {
+                    execCommand(cmd::OpenUrl(urlBuf));
+                    ImGui::CloseCurrentPopup();
+                }
+                if (openDisabled)
+                    ImGui::EndDisabled();
+
+                if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+                    ImGui::CloseCurrentPopup();
+
+                ImGui::EndPopup();
+            }
+
+            ImGui::SetNextWindowPos(mainViewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            if (ImGui::BeginPopupModal(
                 "Generate txt", nullptr,
                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
             )) {
+                if (ImGui::IsWindowAppearing())
+                    ImGui::SetKeyboardFocusHere();
+
                 static int genTxtValue = 1;
                 ImGui::InputInt("##GenTxtInput", &genTxtValue, 0, 0);
 
@@ -202,6 +237,9 @@ void Ui::build() {
                 ImGui::Separator();
                 ImGui::Spacing();
 
+                if (ImGui::IsWindowAppearing())
+                    ImGui::SetKeyboardFocusHere();
+
                 if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
                     const auto data = std::move(m_InfoMsgData);
                     ImGui::CloseCurrentPopup();
@@ -230,6 +268,9 @@ void Ui::build() {
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
+
+                if (ImGui::IsWindowAppearing())
+                    ImGui::SetKeyboardFocusHere();
 
                 if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
                     m_ErrorMsg.clear();
@@ -284,9 +325,8 @@ void Ui::build() {
                 ImGui::Spacing();
             }
 
-            float fraction;
-            if (!progressData.infinite && !progressData.cancelled) {
-                fraction = progressData.progress.load(std::memory_order_relaxed);
+            float fraction = progressData.progress.load(std::memory_order_relaxed);
+            if (!progressData.cancelled && fraction >= 0.0f) {
                 ImFormatString(buf, IM_COUNTOF(buf), "%s: %.0f%%", progressData.name.c_str(), fraction * 100 + 0.01f);
             }
             else {
@@ -362,9 +402,9 @@ void Ui::ProgressRAII::setCancelled() const {
     m_Iterator->cancelled = true;
 }
 
-std::unique_ptr<Ui::ProgressRAII> Ui::pushProgress(std::string name, const bool infinite, std::function<void()> cancelClickCallback) {
+std::unique_ptr<Ui::ProgressRAII> Ui::pushProgress(std::string name, std::function<void()> cancelClickCallback) {
     return std::make_unique<ProgressRAII>(
         &m_ProgressDataQueue,
-        m_ProgressDataQueue.emplace(m_ProgressDataQueue.cend(), std::move(name), infinite, std::move(cancelClickCallback), false, 0.0f)
+        m_ProgressDataQueue.emplace(m_ProgressDataQueue.cend(), std::move(name), std::move(cancelClickCallback))
     );
 }

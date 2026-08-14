@@ -4,9 +4,10 @@
 #include <span>
 #include <stop_token>
 
+class FileReader;
 class FileMapping;
 
-// sparse line index over a memory-mapped file
+// sparse line index over a text file
 // stores a byte offset only every kBytesPerAnchor
 // the rest is rescanned with memchr during get()
 class LineIndexer {
@@ -20,20 +21,19 @@ public:
 
     static std::unique_ptr<LineIndexer> create(const std::filesystem::path& path, std::string& outErrorMsg);
 
-    // normally should run on a background thread - publishes partial results as it goes, so the UI can render the already-indexed part
-    void startScan(const std::stop_token& st, std::atomic<float>& outProgress);
+    std::optional<std::string> startScan(const std::stop_token& st, std::atomic<float>& outProgress);
 
     // returns codepoints [fromCol, min(fromCol + colsNum, line length)) of the line.
     // pointer is valid until the next call
     std::string_view get(uint64_t lineIdx, uint64_t fromCol, uint64_t colsNum, uint64_t& outLineTotalLength) const;
     void getTextSize(uint64_t& maxColsNum, uint64_t& rowsNum) const;
 private:
-    LineIndexer(std::unique_ptr<FileMapping>&& scanFilePtr, std::unique_ptr<FileMapping>&& uiFilePtr);
+    LineIndexer(std::unique_ptr<FileReader>&& scanFilePtr, std::unique_ptr<FileMapping>&& uiFilePtr);
 
     uint64_t computeLineOffsetBytes(uint64_t lineIdx) const;
     std::span<const char> getLineBytes(uint64_t lineIdx) const;
 
-    const std::unique_ptr<FileMapping> m_ScanFilePtr; // for startScan() only
+    std::unique_ptr<FileReader> m_ScanFilePtr; // for startScan() only
     const std::unique_ptr<FileMapping> m_UiFilePtr; // for get() only
 
     struct Anchor { uint64_t lineIdx; uint64_t offsetBytes; };
@@ -52,7 +52,7 @@ private:
     };
     mutable CacheData m_CacheData;
 
-    static constexpr uint64_t kBytesPerAnchor = 1ull << 20; // caps the re-scan distance - 1 mb
-    static constexpr size_t kScanChunkBytes = 4ull << 20; // linear scan step - 4 mb
+    static constexpr uint64_t kBytesPerAnchor = 128ull << 10; // caps how far get() has to rescan (trades index memory for lookup latency) - 128 kb
+    static constexpr size_t kScanChunkBytes = 4ull << 20; // read buffer for the linear scan - 4 mb
     static constexpr size_t kMaxBytesPerLine = 64ull << 10; // guards against files with very long lines or no line breaks - 64 kb
 };

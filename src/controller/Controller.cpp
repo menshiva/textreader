@@ -1,6 +1,6 @@
 ﻿#include "Controller.h"
-#include "../utils/Random.h"
 #include "file/FileWriter.h"
+#include "gen/TextGenerator.h"
 #include "indexer/LineIndexer.h"
 
 Controller::Controller(Win32App &app, Ui& ui) : m_App(app), m_Ui(ui) {
@@ -159,8 +159,7 @@ void Controller::startOpenJob(OpenPayload&& payload) {
 }
 
 std::optional<std::string> Controller::openJobRoutine(const OpenPayload& d, const std::stop_token& st, std::atomic<float>& progress) {
-    d.lineIndexerPtr->startScan(st, progress);
-    return std::nullopt; // TODO: make startScan return an error
+    return d.lineIndexerPtr->startScan(st, progress);
 }
 
 // ReSharper disable once CppPassValueParameterByConstReference
@@ -245,13 +244,6 @@ void Controller::onDownloadJobFinished(std::optional<std::string> errorOpt, cons
     }});
 }
 
-namespace {
-    constexpr size_t kGenFileWriteBuffSize = 1ull << 20;  // 1 mb
-    constexpr char kGenAlphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .";
-    constexpr uint32_t kGenLineLen = 1024;
-    constexpr size_t kGenPoolSize = 64ull << 10;       // 64 kb
-}
-
 void Controller::genImpl(const uint64_t targetBytes, const uint64_t targetLines) {
     if (m_GenJob.isAlive()) {
         confirmJobCancelThen(
@@ -274,9 +266,15 @@ void Controller::genImpl(const uint64_t targetBytes, const uint64_t targetLines)
         return;
     }
 
-    auto writer = FileWriter::open(tmpFilePath, kGenFileWriteBuffSize, targetBytes);
+    if (auto errorOpt = textgen::checkDiskSpace(tmpFilePath, targetBytes)) {
+        m_Ui.showErrorMsg(std::move(*errorOpt));
+        return;
+    }
+
+    std::string errorMsg;
+    auto writer = FileWriter::open(tmpFilePath, textgen::kWriteBufferSize, targetBytes, errorMsg);
     if (!writer) {
-        m_Ui.showErrorMsg("Cannot create temp text file for writing");
+        m_Ui.showErrorMsg(std::move(errorMsg));
         return;
     }
 
@@ -291,89 +289,7 @@ void Controller::genImpl(const uint64_t targetBytes, const uint64_t targetLines)
 }
 
 std::optional<std::string> Controller::genJobRoutine(const GenPayload& d, const std::stop_token& st, std::atomic<float>& progress) {
-    bool error = false;
-    XorShift32 rnd;
-    constexpr uint32_t alphabetLen = sizeof(kGenAlphabet) - 1;
-
-    std::vector<char> pool(kGenPoolSize);
-    for (size_t i = 0; i < kGenPoolSize; ++i)
-        pool[i] = kGenAlphabet[rnd.next() % alphabetLen];
-    constexpr size_t poolSpan = kGenPoolSize - kGenLineLen;
-
-    char* const begin = d.writer->getBuffer();
-    const char* const end = begin + kGenFileWriteBuffSize;
-    char* p = begin;
-
-    const auto flushBuffer = [&](const float percent, const size_t count = kGenFileWriteBuffSize) -> bool {
-        if (!d.writer->submit(count))
-            return false;
-        progress.store(percent, std::memory_order_relaxed);
-        p = begin;
-        return true;
-    };
-    const auto appendChunkAndFlush = [&](uint32_t left, const float percent) -> bool {
-        while (left > 0) {
-            if (p == end && !flushBuffer(percent))
-                return false;
-            const uint32_t chunk = std::min<uint32_t>(static_cast<uint32_t>(end - p), left);
-            memcpy(p, pool.data() + rnd.next() % poolSpan, chunk);
-            p += chunk;
-            left -= chunk;
-        }
-        if (p == end && !flushBuffer(percent))
-            return false;
-        *p++ = '\r';
-        if (p == end && !flushBuffer(percent))
-            return false;
-        *p++ = '\n';
-        return true;
-    };
-
-    if (d.targetBytes) {
-        const uint64_t targetBytes = d.targetBytes;
-        const auto targetBytesFlt = static_cast<float>(targetBytes);
-        uint64_t remaining = targetBytes;
-        while (remaining >= 2) {
-            if (st.stop_requested())
-                break;
-
-            // handle \r\n
-            const auto maxLen = static_cast<uint32_t>(
-                remaining - 2 < kGenLineLen - 1 ? remaining - 2 : kGenLineLen - 1);
-            uint32_t len = rnd.next() % kGenLineLen;
-            if (len > maxLen) len = maxLen;
-            if (remaining - 2 - len == 1) ++len;
-
-            if (!appendChunkAndFlush(len, static_cast<float>(targetBytes - remaining) / targetBytesFlt)) {
-                error = true;
-                break;
-            }
-            remaining -= len + 2;
-        }
-    }
-    else {
-        const uint64_t targetLines = d.targetLines;
-        const auto targetLinesFlt = static_cast<float>(targetLines);
-        for (uint64_t n = 0; n < targetLines; ++n) {
-            if (st.stop_requested())
-                break;
-
-            const uint32_t left = rnd.next() % kGenLineLen;
-            if (!appendChunkAndFlush(left, static_cast<float>(n) / targetLinesFlt)) {
-                error = true;
-                break;
-            }
-        }
-    }
-
-    if (!d.writer->finish(static_cast<size_t>(p - begin)))
-        error = true;
-
-    if (error)
-        return "Cannot write the generated file (out of disk space?)";
-
-    progress.store(1.0f, std::memory_order_relaxed);
-    return std::nullopt;
+    return textgen::generate(*d.writer, st, progress, d.targetBytes, d.targetLines);
 }
 
 // ReSharper disable once CppPassValueParameterByConstReference

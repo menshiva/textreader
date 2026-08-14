@@ -1,6 +1,7 @@
 ﻿#include "LineIndexer.h"
 #include <cassert>
 #include "../file/FileMapping.h"
+#include "../file/FileReader.h"
 
 static bool isUtf8ContinuationByte(const unsigned char c) {
     // utf-8 always has 10xxxxxx
@@ -8,6 +9,7 @@ static bool isUtf8ContinuationByte(const unsigned char c) {
 }
 
 static uint64_t countUtf8Codepoints(const char* dataBegin, const char* dataEnd) {
+    // a codepoint is one byte that is not a continuation byte
     uint64_t res = 0;
     while (dataBegin < dataEnd)
         res += static_cast<uint64_t>(!isUtf8ContinuationByte(*dataBegin++));
@@ -64,10 +66,10 @@ void LineIndexer::getTextSize(uint64_t& maxColsNum, uint64_t& rowsNum) const {
 LineIndexer::~LineIndexer() = default;
 
 std::unique_ptr<LineIndexer> LineIndexer::create(const std::filesystem::path& path, std::string& outErrorMsg) {
-    auto scanFilePtr = FileMapping::open(path, FileMapping::AccessPattern::Sequential, outErrorMsg);
+    auto scanFilePtr = FileReader::open(path, kScanChunkBytes, outErrorMsg);
     if (!scanFilePtr)
         return nullptr;
-    auto uiFilePtr = FileMapping::open(path, FileMapping::AccessPattern::RandomAccess, outErrorMsg);
+    auto uiFilePtr = FileMapping::open(path, outErrorMsg);
     if (!uiFilePtr)
         return nullptr;
     return std::unique_ptr<LineIndexer>(new LineIndexer(std::move(scanFilePtr), std::move(uiFilePtr)));
@@ -80,25 +82,26 @@ static const char* alignToUtf8Boundary(const char* begin, const char* p) {
     return p;
 }
 
-void LineIndexer::startScan(const std::stop_token& st, std::atomic<float>& outProgress) {
+std::optional<std::string> LineIndexer::startScan(const std::stop_token& st, std::atomic<float>& outProgress) {
     const uint64_t fileSizeBytes = m_ScanFilePtr->getSizeBytes();
     if (fileSizeBytes == 0)
-        return;
+        return std::nullopt;
+
+    auto chunk = m_ScanFilePtr->next();
+    if (chunk.empty())
+        return m_ScanFilePtr->hasError() ? std::optional<std::string>("Cannot read the file") : std::nullopt;
 
     // handle utf-8 bom
     uint64_t contentStartOffsetBytes = 0;
+    if (chunk.size() >= 3
+            && static_cast<unsigned char>(chunk[0]) == 0xEF
+            && static_cast<unsigned char>(chunk[1]) == 0xBB
+            && static_cast<unsigned char>(chunk[2]) == 0xBF)
     {
-        const auto head = m_ScanFilePtr->view(0, 3);
-        if (head.size() >= 3
-                && static_cast<unsigned char>(head[0]) == 0xEF
-                && static_cast<unsigned char>(head[1]) == 0xBB
-                && static_cast<unsigned char>(head[2]) == 0xBF)
-        {
-            contentStartOffsetBytes = 3;
-        }
+        contentStartOffsetBytes = 3;
     }
     if (contentStartOffsetBytes >= fileSizeBytes)
-        return;
+        return std::nullopt;
 
     // reserve max possible size to preserve stable pointers in get() function
     m_Anchors.reserve(fileSizeBytes / kBytesPerAnchor + 2);
@@ -140,20 +143,15 @@ void LineIndexer::startScan(const std::stop_token& st, std::atomic<float>& outPr
     // fixes rare case when \r is in the end of the previous chunk and \n is in the beginning of the current one
     char lastByteOfPrevChunk = '\0';
 
-    // process file by chunks of kScanChunkBytes
-    uint64_t posBytes = contentStartOffsetBytes;
-    while (posBytes < fileSizeBytes) {
-        if (st.stop_requested())
-            return;
+    // absolute offset of the current chunk's first byte
+    uint64_t chunkStartBytes = 0;
 
-        const auto chunk = m_ScanFilePtr->view(posBytes, kScanChunkBytes);
-        if (chunk.empty())
-            break;
-
+    // process file by chunks of kScanChunkBytes (the first one is already in hand)
+    for (;;) {
         // process chunk
 
         const auto chunkBegin = chunk.data();
-        auto chunkDataP = chunkBegin;
+        auto chunkDataP = chunkBegin + (chunkStartBytes == 0 ? contentStartOffsetBytes : 0); // skip the bom
         const auto chunkEnd = chunkBegin + chunk.size();
 
         while (chunkDataP < chunkEnd) {
@@ -177,7 +175,7 @@ void LineIndexer::startScan(const std::stop_token& st, std::atomic<float>& outPr
             currentLineBytesNum = 0;
             currentLineColsNum = 0;
 
-            const uint64_t nextLineStartBytes = posBytes + static_cast<uint64_t>(newLinePtr - chunkBegin) + 1;
+            const uint64_t nextLineStartBytes = chunkStartBytes + static_cast<uint64_t>(newLinePtr - chunkBegin) + 1;
             ++currentLineIdx;
             currentLineStartOffsetBytes = nextLineStartBytes;
 
@@ -192,9 +190,19 @@ void LineIndexer::startScan(const std::stop_token& st, std::atomic<float>& outPr
         }
 
         lastByteOfPrevChunk = *(chunkEnd - 1);
-        posBytes += chunk.size();
+        chunkStartBytes += chunk.size();
 
-        publishData(static_cast<float>(static_cast<double>(posBytes - contentStartOffsetBytes) / totalToProcessDbl));
+        publishData(static_cast<float>(static_cast<double>(chunkStartBytes - contentStartOffsetBytes) / totalToProcessDbl));
+
+        if (st.stop_requested())
+            return std::nullopt;
+
+        chunk = m_ScanFilePtr->next();
+        if (chunk.empty()) {
+            if (m_ScanFilePtr->hasError())
+                return "Cannot read the file";
+            break; // end of file
+        }
     }
 
     // process last line remainder
@@ -205,10 +213,13 @@ void LineIndexer::startScan(const std::stop_token& st, std::atomic<float>& outPr
     }
 
     publishData(1.0f);
+    m_ScanFilePtr.reset();
+
+    return std::nullopt;
 }
 
 LineIndexer::LineIndexer(
-    std::unique_ptr<FileMapping>&& scanFilePtr, std::unique_ptr<FileMapping>&& uiFilePtr
+    std::unique_ptr<FileReader>&& scanFilePtr, std::unique_ptr<FileMapping>&& uiFilePtr
 ) : m_ScanFilePtr(std::move(scanFilePtr)), m_UiFilePtr(std::move(uiFilePtr)) {}
 
 uint64_t LineIndexer::computeLineOffsetBytes(const uint64_t lineIdx) const {

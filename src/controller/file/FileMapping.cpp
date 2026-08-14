@@ -7,11 +7,10 @@ FileMapping::~FileMapping() {
     CloseHandle(m_Handle);
 }
 
-std::unique_ptr<FileMapping> FileMapping::open(const std::filesystem::path& path, const AccessPattern accessPattern, std::string& outErrorMsg) {
-    const DWORD flags = accessPattern == AccessPattern::Sequential ? FILE_FLAG_SEQUENTIAL_SCAN : FILE_FLAG_RANDOM_ACCESS;
+std::unique_ptr<FileMapping> FileMapping::open(const std::filesystem::path& path, std::string& outErrorMsg) {
     const auto handle = CreateFileW(
-        path.c_str(), GENERIC_READ, FILE_SHARE_READ /*| FILE_SHARE_WRITE*/,
-        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | flags, nullptr
+        path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, nullptr
     );
     if (handle == INVALID_HANDLE_VALUE) {
         outErrorMsg = "Cannot open the file";
@@ -37,7 +36,7 @@ std::unique_ptr<FileMapping> FileMapping::open(const std::filesystem::path& path
         }
     }
 
-    return std::unique_ptr<FileMapping>(new FileMapping(accessPattern, handle, sizeBytes, mappingHandle));
+    return std::unique_ptr<FileMapping>(new FileMapping(handle, sizeBytes, mappingHandle));
 }
 
 // requires for MapViewOfFile (https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile#parameters:~:text=That%20is%2C%20the%20offset%20must%20be%20a%20multiple%20of%20the%20VirtualAlloc%20allocation%20granularity.)
@@ -65,9 +64,8 @@ std::span<const char> FileMapping::view(const uint64_t offsetBytes, size_t numBy
 
         const uint64_t windowSizeBytes = std::max<uint64_t>(kMinWindowSizeBytes, numBytes);
 
-        const uint64_t backOffsetBytes = m_AccessPattern == AccessPattern::Sequential
-            ? 0
-            : (windowSizeBytes - numBytes) / 2; // we want to be in the middle of the window
+        // centre the request in the window, so a jump in either direction stays inside it
+        const uint64_t backOffsetBytes = (windowSizeBytes - numBytes) / 2;
         uint64_t startBytes = offsetBytes > backOffsetBytes ? offsetBytes - backOffsetBytes : 0; // clamp to 0
 
         // align to the allocation granularity
@@ -94,8 +92,8 @@ std::span<const char> FileMapping::view(const uint64_t offsetBytes, size_t numBy
 }
 
 FileMapping::FileMapping(
-    const AccessPattern accessPattern, const HANDLE handle, const uint64_t sizeBytes, const HANDLE mappingHandle
-) : m_AccessPattern(accessPattern), m_Handle(handle), m_SizeBytes(sizeBytes), m_MappingHandle(mappingHandle) {}
+    const HANDLE handle, const uint64_t sizeBytes, const HANDLE mappingHandle
+) : m_Handle(handle), m_SizeBytes(sizeBytes), m_MappingHandle(mappingHandle) {}
 
 void FileMapping::unmapView() {
     if (m_CurrentViewPtr)

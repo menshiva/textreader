@@ -1,86 +1,71 @@
-﻿#include "FileWriter.h"
+#include "FileWriter.h"
 
 FileWriter::~FileWriter() {
-    if (m_Handle != INVALID_HANDLE_VALUE)
-        CloseHandle(m_Handle);
-    if (m_Buffer)
-        VirtualFree(m_Buffer, 0, MEM_RELEASE);
+    CloseHandle(m_Handle);
 }
 
-std::unique_ptr<FileWriter> FileWriter::open(const std::filesystem::path& path, const size_t bufferSize, const uint64_t preallocBytes) {
-    if (bufferSize == 0 || bufferSize % 4096 != 0 || bufferSize > MAXDWORD)
+std::unique_ptr<FileWriter> FileWriter::open(
+    const std::filesystem::path& path, const size_t bufferSize, const uint64_t preallocBytes, std::string& outErrorMsg
+) {
+    if (bufferSize == 0 || bufferSize % kSectorAlignment != 0 || bufferSize > MAXDWORD) {
+        outErrorMsg = "Invalid write buffer size";
         return nullptr;
+    }
 
-    auto res = std::unique_ptr<FileWriter>(new FileWriter());
+    AlignedBuffer buffer(static_cast<char*>(_aligned_malloc(bufferSize, kSectorAlignment)));
+    if (!buffer) {
+        outErrorMsg = "Cannot allocate the write buffer";
+        return nullptr;
+    }
 
-    res->m_Handle = CreateFileW(
+    const auto handle = CreateFileW(
         path.c_str(), GENERIC_WRITE, 0, nullptr,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING, nullptr
     );
-    if (res->m_Handle == INVALID_HANDLE_VALUE) {
-        // try to open a file without FILE_FLAG_NO_BUFFERING
-        res->m_Handle = CreateFileW(
-            path.c_str(), GENERIC_WRITE, 0, nullptr,
-            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr
-        );
-        if (res->m_Handle == INVALID_HANDLE_VALUE)
-            return nullptr;
-        res->m_Unbuffered = false;
-    }
-
-    FILE_STORAGE_INFO si{};
-    if (GetFileInformationByHandleEx(res->m_Handle, FileStorageInfo, &si, sizeof(si)) && si.LogicalBytesPerSector > res->m_Sector)
-        res->m_Sector = si.LogicalBytesPerSector;
-    if (bufferSize % res->m_Sector != 0)
+    if (handle == INVALID_HANDLE_VALUE) {
+        outErrorMsg = "Cannot create the file for writing";
         return nullptr;
-
-    res->m_BufferSize = bufferSize;
+    }
 
     if (preallocBytes) {
         FILE_END_OF_FILE_INFO eof{};
         eof.EndOfFile.QuadPart = static_cast<LONGLONG>(preallocBytes);
-        if (!SetFileInformationByHandle(res->m_Handle, FileEndOfFileInfo, &eof, sizeof(eof)))
-            return nullptr; // probably no space
+        if (!SetFileInformationByHandle(handle, FileEndOfFileInfo, &eof, sizeof(eof))) {
+            outErrorMsg = "Cannot reserve space for the file (not enough disk space?)";
+            CloseHandle(handle);
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+            return nullptr;
+        }
     }
 
-    res->m_Buffer = static_cast<char*>(VirtualAlloc(nullptr, res->m_BufferSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
-    if (!res->m_Buffer)
-        return nullptr;
-
-    return res;
+    return std::unique_ptr<FileWriter>(new FileWriter(handle, std::move(buffer), bufferSize));
 }
 
-bool FileWriter::submit(const size_t count) {
-    if (m_Finished || count == 0 || count > m_BufferSize)
-        return false;
-    if (m_Unbuffered && count % m_Sector != 0)
+bool FileWriter::writeBuffer() {
+    if (m_Finished)
         return false;
 
-    if (!writeRaw(count))
+    if (!writeRaw(m_BufferSize))
         return false;
-    m_LogicalSize += count;
+    m_LogicalSize += m_BufferSize;
 
     return true;
 }
 
-bool FileWriter::finish(const size_t tailCount) {
-    if (m_Finished)
+bool FileWriter::finish(const size_t num) {
+    if (m_Finished || num > m_BufferSize)
         return false;
     m_Finished = true;
 
     bool ok = true;
 
-    if (tailCount > 0 && tailCount <= m_BufferSize) {
-        size_t toWrite = tailCount;
-        if (m_Unbuffered) {
-            toWrite = (tailCount + m_Sector - 1) & ~static_cast<size_t>(m_Sector - 1);
-            if (toWrite > m_BufferSize)
-                toWrite = m_BufferSize;
-            memset(m_Buffer + tailCount, '\0', toWrite - tailCount);
-        }
+    if (num > 0) {
+        const size_t toWrite = (num + kSectorAlignment - 1) & ~(kSectorAlignment - 1); // round up to the nearest kSectorAlignment
+        memset(m_Buffer.get() + num, '\0', toWrite - num);
         ok = writeRaw(toWrite);
         if (ok)
-            m_LogicalSize += tailCount;
+            m_LogicalSize += num; // the padding is not part of the file
     }
 
     FILE_END_OF_FILE_INFO eof{};
@@ -91,9 +76,18 @@ bool FileWriter::finish(const size_t tailCount) {
     return ok;
 }
 
-bool FileWriter::writeRaw(const size_t count) const {
-    DWORD written = 0;
-    if (!WriteFile(m_Handle, m_Buffer, static_cast<DWORD>(count), &written, nullptr))
-        return false;
-    return written == count;
+bool FileWriter::writeRaw(size_t count) const {
+    const char* p = m_Buffer.get();
+    while (count > 0) {
+        DWORD written = 0;
+        if (!WriteFile(m_Handle, p, static_cast<DWORD>(count), &written, nullptr) || written == 0)
+            return false;
+        p += written;
+        count -= written;
+    }
+    return true;
 }
+
+FileWriter::FileWriter(
+    const HANDLE handle, AlignedBuffer&& buffer, const size_t bufferSize
+) : m_Handle(handle), m_Buffer(std::move(buffer)), m_BufferSize(bufferSize) {}

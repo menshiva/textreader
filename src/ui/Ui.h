@@ -2,7 +2,7 @@
 
 #include <memory>
 #include "../controller/Commands.h"
-#include "textView/TextView.h"
+#include "text_view/TextView.h"
 
 class Win32App;
 
@@ -13,10 +13,10 @@ public:
 
     Ui(const Ui&) = delete;
     Ui& operator=(const Ui&) = delete;
-    Ui(Ui&&) = delete;
-    Ui& operator=(Ui&&) = delete;
+    Ui(Ui&&) noexcept = delete;
+    Ui& operator=(Ui&&) noexcept = delete;
 
-    using CommandHandler = std::function<bool(const Command&)>;
+    using CommandHandler = std::function<void(const Command&)>;
     void setCommandHandler(CommandHandler handler) { m_SendCommand = std::move(handler); }
 
     static void newFrame();
@@ -26,32 +26,46 @@ public:
     void setFileOpened(TextView::Source source);
     void setFileClosed();
 
+    struct InfoMsgData {
+        std::string infoMsg;
+        std::function<void(bool)> callback;
+    };
+    void showInfoMsg(InfoMsgData msg) { m_InfoMsgData = std::move(msg); }
+
     void showErrorMsg(std::string msg) { m_ErrorMsg = std::move(msg); }
 private:
-    struct ProgressPopupData {
-        const char* name = nullptr;
-        bool infinite = false;
-        bool cancelled = false;
-        std::atomic<float> progress{0.0f};
-    } m_ProgressPopupData;
-public:
-    struct ProgressPopupRAII {
-        explicit ProgressPopupRAII(ProgressPopupData* dataPtr);
-        ~ProgressPopupRAII();
+    void execCommand(const Command& command) const;
 
-        void setProgressTS(float val) const;
-        void setCancelled() const;
-    private:
-        ProgressPopupData* m_DataPtr;
-    };
-    std::unique_ptr<ProgressPopupRAII> acquireProgressPopup(const char* name, bool infinite);
-private:
-    bool sendAndExecCommand(const Command& command) const;
+    bool m_Win32Initialized = false;
+    bool m_Dx11Initialized = false;
 
     CommandHandler m_SendCommand;
 
     bool m_FileOpen = false;
     TextView m_TextView;
 
+    InfoMsgData m_InfoMsgData;
     std::string m_ErrorMsg;
+
+    struct ProgressData {
+        std::string name;
+        bool infinite = false;
+        std::function<void()> cancelClickCallback = nullptr;
+
+        bool cancelled = false;
+        std::atomic<float> progress = 0.0f;
+    };
+    std::list<ProgressData> m_ProgressDataQueue;
+public:
+    struct ProgressRAII {
+        ProgressRAII(std::list<ProgressData>* queuePtr, const std::list<ProgressData>::iterator& it);
+        ~ProgressRAII();
+
+        std::atomic<float>& getProgressTS() const;
+        void setCancelled() const;
+    private:
+        std::list<ProgressData>* m_ProgressDataQueuePtr;
+        std::list<ProgressData>::iterator m_Iterator;
+    };
+    std::unique_ptr<ProgressRAII> pushProgress(std::string name, bool infinite, std::function<void()> cancelClickCallback = nullptr);
 };

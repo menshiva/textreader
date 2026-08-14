@@ -12,14 +12,14 @@ public:
 
     TextView(const TextView&) = delete;
     TextView& operator=(const TextView&) = delete;
-    TextView(TextView&&) = delete;
-    TextView& operator=(TextView&&) = delete;
+    TextView(TextView&&) noexcept = delete;
+    TextView& operator=(TextView&&) noexcept = delete;
 
     struct Source {
-        std::function<std::string_view(uint64_t lineIdx, uint64_t fromCol, uint64_t maxCols, uint64_t& outLineTotalLength)> getLine;
-        uint64_t maxNum[2];
+        std::function<std::string_view(uint64_t lineIdx, uint64_t fromCol, uint64_t colsNum, uint64_t& outLineTotalLength)> getLine;
+        std::function<void(uint64_t& maxColsNum, uint64_t& rowsNum)> getTextSize;
     };
-    void reset(Source source = Source{nullptr, {0, 0}});
+    void reset(Source source = Source{nullptr, nullptr});
     void draw();
 private:
     struct LayoutData {
@@ -74,7 +74,7 @@ private:
 
     bool handleScrollbarInput(const LayoutData& layoutData, const ImVec2& fontSize);
     void scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, int idx);
-    void handleInput(const LayoutData& layoutData, const ImVec2& fontSize);
+    void handleInput(const LayoutData& layoutData, const ImVec2& fontSize, uint64_t sourceMaxLinesNum);
 
     double getCurrentPos(const ImVec2& fontSize, int idx) const;
     void setPos(const ImVec2& fontSize, double pos, int idx);

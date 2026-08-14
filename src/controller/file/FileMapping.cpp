@@ -1,5 +1,46 @@
 ﻿#include "FileMapping.h"
 
+FileMapping::~FileMapping() {
+    unmapView();
+    if (m_MappingHandle)
+        CloseHandle(m_MappingHandle);
+    CloseHandle(m_Handle);
+}
+
+std::unique_ptr<FileMapping> FileMapping::open(const std::filesystem::path& path, const AccessPattern accessPattern, std::string& outErrorMsg) {
+    const DWORD flags = accessPattern == AccessPattern::Sequential ? FILE_FLAG_SEQUENTIAL_SCAN : FILE_FLAG_RANDOM_ACCESS;
+    const auto handle = CreateFileW(
+        path.c_str(), GENERIC_READ, FILE_SHARE_READ /*| FILE_SHARE_WRITE*/,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | flags, nullptr
+    );
+    if (handle == INVALID_HANDLE_VALUE) {
+        outErrorMsg = "Cannot open the file";
+        return nullptr;
+    }
+
+    LARGE_INTEGER sz{};
+    if (!GetFileSizeEx(handle, &sz) || sz.QuadPart < 0) {
+        outErrorMsg = "Cannot get the file size";
+        CloseHandle(handle);
+        return nullptr;
+    }
+    const auto sizeBytes = static_cast<uint64_t>(sz.QuadPart);
+
+    HANDLE mappingHandle = nullptr; // empty file can't be mapped
+    if (sizeBytes > 0) {
+        // CreateFileMappingW() returns NULL instead of INVALID_HANDLE_VALUE!!!!!
+        mappingHandle = CreateFileMappingW(handle, nullptr, PAGE_READONLY, 0, 0, nullptr);
+        if (!mappingHandle) {
+            outErrorMsg = "Cannot create the file mapping";
+            CloseHandle(handle);
+            return nullptr;
+        }
+    }
+
+    return std::unique_ptr<FileMapping>(new FileMapping(accessPattern, handle, sizeBytes, mappingHandle));
+}
+
+// requires for MapViewOfFile (https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile#parameters:~:text=That%20is%2C%20the%20offset%20must%20be%20a%20multiple%20of%20the%20VirtualAlloc%20allocation%20granularity.)
 static DWORD allocationGranularity() {
     static const DWORD g = [] {
         SYSTEM_INFO si;
@@ -9,97 +50,57 @@ static DWORD allocationGranularity() {
     return g;
 }
 
-FileMapping::~FileMapping() {
-    close();
-}
-
-bool FileMapping::open(const std::filesystem::path &path) {
-    const auto newFile = CreateFileW(
-        path.c_str(), GENERIC_READ, FILE_SHARE_READ /*| FILE_SHARE_WRITE*/,
-        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr
-    );
-    if (newFile == INVALID_HANDLE_VALUE)
-        return false;
-
-    LARGE_INTEGER sz{};
-    if (!GetFileSizeEx(newFile, &sz) || sz.QuadPart <= 0) {
-        close();
-        return false;
-    }
-    const auto newSize = static_cast<uint64_t>(sz.QuadPart);
-
-    const auto newMapping = CreateFileMappingW( // returns NULL instead of INVALID_HANDLE_VALUE!!!!!
-        newFile, nullptr, PAGE_READONLY, 0, 0, nullptr
-    );
-    if (!newMapping) {
-        CloseHandle(newFile);
-        return false;
-    }
-
-    close();
-
-    m_FilePath = path;
-    m_File = newFile;
-    m_Size = newSize;
-    m_Mapping = newMapping;
-
-    return true;
-}
-
-void FileMapping::close() {
-    m_CurrentViewOffset = 0;
-    unmapView();
-
-    if (m_Mapping) {
-        CloseHandle(m_Mapping);
-        m_Mapping = nullptr;
-    }
-    m_Size = 0;
-    if (m_File != INVALID_HANDLE_VALUE) {
-        CloseHandle(m_File);
-        m_File = INVALID_HANDLE_VALUE;
-    }
-    m_FilePath.clear();
-}
-
-std::span<const char> FileMapping::view(const uint64_t offset, size_t len) {
-    if (!m_Mapping || offset >= m_Size)
+std::span<const char> FileMapping::view(const uint64_t offsetBytes, size_t numBytes) {
+    if (!m_MappingHandle || offsetBytes >= m_SizeBytes)
         return {};
 
-    len = static_cast<size_t>(std::min<uint64_t>(len, m_Size - offset));
-    if (len == 0)
+    // clamp to the total file size
+    numBytes = static_cast<size_t>(std::min<uint64_t>(numBytes, m_SizeBytes - offsetBytes));
+    if (numBytes == 0)
         return {};
 
-    if (!(m_CurrentViewPtr && offset >= m_CurrentViewOffset && offset + len <= m_CurrentViewOffset + m_CurrentViewLen)) {
-        // not in current view -> get a new map
+    if (!m_CurrentViewPtr || offsetBytes < m_CurrentViewOffsetBytes || offsetBytes + numBytes > m_CurrentViewOffsetBytes + m_CurrentViewSizeBytes) {
+        // not in current view -> remap
         unmapView();
 
-        const DWORD gran = allocationGranularity();
-        constexpr uint64_t back = kWindowSizeBytes / 2;
-        uint64_t start = offset > back ? offset - back : 0; // move to the middle of the window
-        start -= start % gran;
+        const uint64_t windowSizeBytes = std::max<uint64_t>(kMinWindowSizeBytes, numBytes);
 
-        const size_t requestSize = std::min<uint64_t>(std::max<uint64_t>(kWindowSizeBytes, len), m_Size - start);
+        const uint64_t backOffsetBytes = m_AccessPattern == AccessPattern::Sequential
+            ? 0
+            : (windowSizeBytes - numBytes) / 2; // we want to be in the middle of the window
+        uint64_t startBytes = offsetBytes > backOffsetBytes ? offsetBytes - backOffsetBytes : 0; // clamp to 0
+
+        // align to the allocation granularity
+        const uint64_t alignmentShiftBytes = startBytes % static_cast<uint64_t>(allocationGranularity());
+        startBytes -= alignmentShiftBytes;
+
+        // aligning moves the start back -> the window has to grow by the same amount + clamp to the total file size
+        const auto requestSizeBytes = static_cast<size_t>(std::min<uint64_t>(windowSizeBytes + alignmentShiftBytes, m_SizeBytes - startBytes));
+
+        const ULARGE_INTEGER dwFileOffset{.QuadPart = startBytes};
         m_CurrentViewPtr = static_cast<const char*>(MapViewOfFile(
-            m_Mapping, FILE_MAP_READ,
-            static_cast<DWORD>(start >> 32),
-            static_cast<DWORD>(start & 0xFFFFFFFF),
-            requestSize
+            m_MappingHandle, FILE_MAP_READ,
+            dwFileOffset.HighPart, dwFileOffset.LowPart,
+            requestSizeBytes
         ));
         if (!m_CurrentViewPtr)
             return {};
 
-        m_CurrentViewOffset = start;
-        m_CurrentViewLen = requestSize;
+        m_CurrentViewOffsetBytes = startBytes;
+        m_CurrentViewSizeBytes = requestSizeBytes;
     }
 
-    return {m_CurrentViewPtr + (offset - m_CurrentViewOffset), len};
+    return {m_CurrentViewPtr + (offsetBytes - m_CurrentViewOffsetBytes), numBytes};
 }
 
+FileMapping::FileMapping(
+    const AccessPattern accessPattern, const HANDLE handle, const uint64_t sizeBytes, const HANDLE mappingHandle
+) : m_AccessPattern(accessPattern), m_Handle(handle), m_SizeBytes(sizeBytes), m_MappingHandle(mappingHandle) {}
+
 void FileMapping::unmapView() {
-    if (m_CurrentViewPtr) {
+    if (m_CurrentViewPtr)
         UnmapViewOfFile(m_CurrentViewPtr);
-        m_CurrentViewPtr = nullptr;
-        m_CurrentViewLen = 0;
-    }
+    m_CurrentViewPtr = nullptr;
+    m_CurrentViewSizeBytes = 0;
+    m_CurrentViewOffsetBytes = 0;
 }

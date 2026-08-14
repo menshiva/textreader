@@ -1,10 +1,11 @@
 ﻿#include "Ui.h"
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
-#include "imgui_internal.h"
 #include "../app/Win32App.h"
 
-Ui::Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt) : m_TextView() {
+Ui::Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt) {
+    // TODO: outErrorMsgOpt
+
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -23,13 +24,15 @@ Ui::Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt) : m_Text
 
     // Setup Platform/Renderer backends
     if (!ImGui_ImplWin32_Init(app.hwnd())) {
-        outErrorMsgOpt = "Error initializing ImGui (Win32).";
+        outErrorMsgOpt = "Cannot initialize ImGui Win32 backend";
         return;
     }
+    m_Win32Initialized = true;
     if (!ImGui_ImplDX11_Init(app.device(), app.context())) {
-        outErrorMsgOpt = "Error initializing ImGui (DX11).";
+        outErrorMsgOpt = "Cannot initialize ImGui DirectX 11 backend";
         return;
     }
+    m_Dx11Initialized = true;
 
     // load fonts
     {
@@ -40,14 +43,18 @@ Ui::Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt) : m_Text
             fontPath = app.getWinDir() / L"Fonts" / L"consola.ttf";
             font = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), 16.0f, nullptr, nullptr);
         }
-        if (!font)
-            outErrorMsgOpt = "Error loading font.";
+        if (!font) {
+            outErrorMsgOpt = "Cannot load the font";
+            return;
+        }
     }
 }
 
 Ui::~Ui() {
-    ImGui_ImplDX11_Shutdown();
-    ImGui_ImplWin32_Shutdown();
+    if (m_Dx11Initialized)
+        ImGui_ImplDX11_Shutdown();
+    if (m_Win32Initialized)
+        ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 }
 
@@ -59,9 +66,9 @@ void Ui::newFrame() {
 
 void Ui::build() {
     auto& io = ImGui::GetIO();
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
 
     {
-        const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(mainViewport->WorkPos);
         ImGui::SetNextWindowSize(mainViewport->WorkSize);
 
@@ -81,9 +88,9 @@ void Ui::build() {
         if (ImGui::BeginMenuBar()) {
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("Open...", "Ctrl+O"))
-                    sendAndExecCommand(cmd::OpenFile());
+                    execCommand(cmd::OpenFile());
                 if (ImGui::MenuItem("From URL...", "Ctrl+U"))
-                    sendAndExecCommand(cmd::OpenUrl());
+                    execCommand(cmd::OpenUrl());
                 if (ImGui::MenuItem("Generate...", "Ctrl+G"))
                     openGenText = true;
 
@@ -91,12 +98,12 @@ void Ui::build() {
                     ImGui::Separator();
 
                     if (ImGui::MenuItem("Save as...", "Ctrl+S"))
-                        sendAndExecCommand(cmd::SaveAs());
+                        execCommand(cmd::SaveAs());
 
                     ImGui::Separator();
 
                     if (ImGui::MenuItem("Close"))
-                        sendAndExecCommand(cmd::Close());
+                        execCommand(cmd::Close());
                 }
 
                 ImGui::EndMenu();
@@ -109,11 +116,11 @@ void Ui::build() {
             if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && !ImGui::IsAnyItemActive()) {
                 if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O)) {
                     io.ClearInputKeys();
-                    sendAndExecCommand(cmd::OpenFile());
+                    execCommand(cmd::OpenFile());
                 }
                 if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_U)) {
                     io.ClearInputKeys();
-                    sendAndExecCommand(cmd::OpenUrl());
+                    execCommand(cmd::OpenUrl());
                 }
                 if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_G))
                     openGenText = true;
@@ -121,7 +128,7 @@ void Ui::build() {
                 if (m_FileOpen) {
                     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S)) {
                         io.ClearInputKeys();
-                        sendAndExecCommand(cmd::SaveAs());
+                        execCommand(cmd::SaveAs());
                     }
                 }
             }
@@ -129,15 +136,12 @@ void Ui::build() {
 
         // modal opening
         {
-            if (m_ProgressPopupData.name) {
-                if (!ImGui::IsPopupOpen("##progress")) {
-                    ImGui::OpenPopup("##progress");
-                }
-            }
-            else if (openGenText) {
+            if (openGenText) {
                 ImGui::OpenPopup("Generate txt");
             }
-
+            if (!m_InfoMsgData.infoMsg.empty())
+                if (!ImGui::IsPopupOpen("##info"))
+                    ImGui::OpenPopup("##info");
             if (!m_ErrorMsg.empty()) {
                 if (!ImGui::IsPopupOpen("Error"))
                     ImGui::OpenPopup("Error");
@@ -177,8 +181,8 @@ void Ui::build() {
                 if (genButtonDisabled)
                     ImGui::BeginDisabled();
                 if (ImGui::Button("Generate", ImVec2(-FLT_MIN, 0.0f))) {
-                    if (sendAndExecCommand(cmd::GenRandom(static_cast<uint32_t>(genTxtValue), static_cast<cmd::GenRandom::Type>(genTxtItemIdx))))
-                        ImGui::CloseCurrentPopup();
+                    execCommand(cmd::GenRandom(static_cast<uint32_t>(genTxtValue), static_cast<cmd::GenRandom::Type>(genTxtItemIdx)));
+                    ImGui::CloseCurrentPopup();
                 }
                 if (genButtonDisabled)
                     ImGui::EndDisabled();
@@ -191,42 +195,30 @@ void Ui::build() {
 
             ImGui::SetNextWindowPos(mainViewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
             if (ImGui::BeginPopupModal(
-                "##progress", nullptr,
+                "##info", nullptr,
                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
             )) {
-                if (m_ProgressPopupData.name) {
-                    float fraction;
-                    char buf[64];
-                    if (!m_ProgressPopupData.infinite && !m_ProgressPopupData.cancelled) {
-                        fraction = m_ProgressPopupData.progress.load(std::memory_order_relaxed);
-                        ImFormatString(buf, IM_COUNTOF(buf), "%s: %.0f%%", m_ProgressPopupData.name, fraction * 100 + 0.01f);
-                    }
-                    else {
-                        fraction = -static_cast<float>(ImGui::GetTime());
-                        if (!m_ProgressPopupData.cancelled)
-                            ImFormatString(buf, IM_COUNTOF(buf), "%s...", m_ProgressPopupData.name);
-                        else
-                            ImFormatString(buf, IM_COUNTOF(buf), "Cancelling...");
-                    }
-                    ImGui::ProgressBar(fraction, ImVec2(0.0f, 0.0f), buf);
+                ImGui::TextUnformatted(m_InfoMsgData.infoMsg.c_str(), m_InfoMsgData.infoMsg.c_str() + m_InfoMsgData.infoMsg.size());
 
-                    ImGui::Spacing();
-                    ImGui::Separator();
-                    ImGui::Spacing();
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
 
-                    bool __beginDisabledCalled = false; // fix when m_ProgressPopupData.cancelled becomes true after sendAndExecCommand(cmd::Cancel());
-                    if (m_ProgressPopupData.cancelled) {
-                        ImGui::BeginDisabled();
-                        __beginDisabledCalled = true;
-                    }
-                    if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)))
-                        sendAndExecCommand(cmd::Cancel());
-                    if (__beginDisabledCalled && m_ProgressPopupData.cancelled)
-                        ImGui::EndDisabled();
-                }
-                else {
+                if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
+                    const auto data = std::move(m_InfoMsgData);
                     ImGui::CloseCurrentPopup();
+                    if (data.callback)
+                        data.callback(true);
                 }
+
+                if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f))) {
+                    const auto data = std::move(m_InfoMsgData);
+                    ImGui::CloseCurrentPopup();
+                    if (data.callback)
+                        data.callback(false);
+                }
+
+                ImGui::SetItemDefaultFocus();
                 ImGui::EndPopup();
             }
 
@@ -254,31 +246,93 @@ void Ui::build() {
         ImGui::End();
     }
 
+    // loading tasks window
+    {
+        const auto& windowBg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+        const auto& menuBg = ImGui::GetStyleColorVec4(ImGuiCol_MenuBarBg);
+        ImGui::PushStyleColor(ImGuiCol_TitleBg, menuBg);
+        ImGui::PushStyleColor(ImGuiCol_TitleBgActive, menuBg);
+        ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, menuBg);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(menuBg.x, menuBg.y, menuBg.z, windowBg.w));
+        // ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowTitleAlign, ImVec2(0.5f, 0.5f));
+
+        const auto& viewportMin = mainViewport->WorkPos;
+        const auto& viewportMax = viewportMin + mainViewport->WorkSize;
+
+        ImGui::SetNextWindowPos(ImVec2(viewportMax.x - 24.0f, viewportMin.y), 0, ImVec2(1.0f, 0.0f));
+        ImGui::SetNextWindowCollapsed(false, ImGuiCond_Once);
+
+        ImGui::Begin(
+            "Loading tasks###progress", nullptr,
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
+            | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav
+        );
+        ImGui::PopStyleColor(4);
+        ImGui::PopStyleVar(2);
+
+        constexpr static float width = 320.0f;
+        ImGui::Dummy(ImVec2(width, 0.0f));
+
+        int i = 0;
+        char buf[64];
+        for (auto& progressData : m_ProgressDataQueue) {
+            ImGui::PushID(i); // for ImGui::CloseButton()
+
+            if (i > 0) {
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+            }
+
+            float fraction;
+            if (!progressData.infinite && !progressData.cancelled) {
+                fraction = progressData.progress.load(std::memory_order_relaxed);
+                ImFormatString(buf, IM_COUNTOF(buf), "%s: %.0f%%", progressData.name.c_str(), fraction * 100 + 0.01f);
+            }
+            else {
+                fraction = -static_cast<float>(ImGui::GetTime());
+                if (!progressData.cancelled)
+                    ImFormatString(buf, IM_COUNTOF(buf), "%s...", progressData.name.c_str());
+                else
+                    ImFormatString(buf, IM_COUNTOF(buf), "%s: cancelling...", progressData.name.c_str());
+            }
+            ImGui::ProgressBar(fraction, ImVec2(width, 0.0f), buf);
+
+            if (progressData.cancelClickCallback) {
+                const float buttonSize = ImGui::GetFontSize();
+                const float barHeight = ImGui::GetFrameHeight();
+
+                ImGui::SameLine();
+                const auto pos = ImGui::GetCursorScreenPos();
+
+                const bool wasCancelled = progressData.cancelled; // fix ImGui::EndDisabled() when progressData.cancelled becomes true after CloseButton click
+                if (wasCancelled)
+                    ImGui::BeginDisabled();
+                if (ImGui::CloseButton(ImGui::GetID("##cancel"), ImVec2(pos.x, pos.y + (barHeight - buttonSize) * 0.5f))) {
+                    progressData.cancelClickCallback();
+                    progressData.cancelled = true;
+                }
+                if (wasCancelled)
+                    ImGui::EndDisabled();
+
+                ImGui::Dummy(ImVec2(buttonSize, buttonSize)); // move cursor
+            }
+
+            ImGui::PopID();
+            ++i;
+        }
+
+        ImGui::End();
+    }
+
     // TODO: remove
     {
         static bool show_demo_window = true;
         // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
         if (show_demo_window)
             ImGui::ShowDemoWindow(&show_demo_window);
-    }
-
-    // TODO: remove
-    // 2. Show a simple window that we create ourselves. We use a Begin/End pair to create a named window.
-    {
-        static float f = 0.0f;
-        static int counter = 0;
-
-        ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
-        ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
-        ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
-
-        if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
-            counter++;
-        ImGui::SameLine();
-        ImGui::Text("counter = %d", counter);
-
-        ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
-        ImGui::End();
     }
 }
 
@@ -297,35 +351,30 @@ void Ui::setFileClosed() {
     m_FileOpen = false;
 }
 
-Ui::ProgressPopupRAII::ProgressPopupRAII(ProgressPopupData* dataPtr) : m_DataPtr(dataPtr) {}
-
-Ui::ProgressPopupRAII::~ProgressPopupRAII() {
-    m_DataPtr->name = nullptr;
-}
-
-void Ui::ProgressPopupRAII::setProgressTS(const float val) const {
-    m_DataPtr->progress.store(val, std::memory_order_relaxed);
-}
-
-void Ui::ProgressPopupRAII::setCancelled() const {
-    m_DataPtr->cancelled = true;
-}
-
-std::unique_ptr<Ui::ProgressPopupRAII> Ui::acquireProgressPopup(const char *name, const bool infinite) {
-    if (m_ProgressPopupData.name)
-        return nullptr;
-
-    m_ProgressPopupData.name = name;
-    m_ProgressPopupData.infinite = infinite;
-    m_ProgressPopupData.cancelled = false;
-    if (!m_ProgressPopupData.infinite)
-        m_ProgressPopupData.progress.store(0.0f, std::memory_order_relaxed);
-
-    return std::make_unique<ProgressPopupRAII>(&m_ProgressPopupData);
-}
-
-bool Ui::sendAndExecCommand(const Command& command) const {
+void Ui::execCommand(const Command& command) const {
     if (m_SendCommand)
-        return m_SendCommand(command);
-    return false;
+        m_SendCommand(command);
+}
+
+Ui::ProgressRAII::ProgressRAII(
+    std::list<ProgressData>* queuePtr, const std::list<ProgressData>::iterator &it
+) : m_ProgressDataQueuePtr(queuePtr), m_Iterator(it) {}
+
+Ui::ProgressRAII::~ProgressRAII() {
+    m_ProgressDataQueuePtr->erase(m_Iterator);
+}
+
+std::atomic<float>& Ui::ProgressRAII::getProgressTS() const {
+    return m_Iterator->progress;
+}
+
+void Ui::ProgressRAII::setCancelled() const {
+    m_Iterator->cancelled = true;
+}
+
+std::unique_ptr<Ui::ProgressRAII> Ui::pushProgress(std::string name, const bool infinite, std::function<void()> cancelClickCallback) {
+    return std::make_unique<ProgressRAII>(
+        &m_ProgressDataQueue,
+        m_ProgressDataQueue.emplace(m_ProgressDataQueue.cend(), std::move(name), infinite, std::move(cancelClickCallback), false, 0.0f)
+    );
 }

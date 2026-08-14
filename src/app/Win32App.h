@@ -11,8 +11,8 @@ public:
 
     Win32App(const Win32App&) = delete;
     Win32App& operator=(const Win32App&) = delete;
-    Win32App(Win32App&&) = delete;
-    Win32App& operator=(Win32App&&) = delete;
+    Win32App(Win32App&&) noexcept = delete;
+    Win32App& operator=(Win32App&&) noexcept = delete;
 
     void pollMessages();
     bool beginFrame();
@@ -28,12 +28,12 @@ public:
     bool shouldClose() const { return m_WindowData.shouldClose; }
 
     void setWindowTitle(const std::optional<const wchar_t*>& titleOpt) const;
-
     std::optional<std::filesystem::path> showTextFileDialog(bool open) const;
 
     const std::filesystem::path& getWinDir() const { return m_WinDir; }
     const std::filesystem::path& getExeDir() const { return m_ExeDir; }
-    const std::filesystem::path& getTmpTextFilePath() const { return m_TmpTextFilePath; }
+    const std::filesystem::path& getReadTmpTextFilePath() const { return m_ReadTmpTextFilePath; }
+    const std::filesystem::path& getWriteTmpTextFilePath() const { return m_WriteTmpTextFilePath; }
 private:
     bool CreateDeviceD3D();
     void CleanupDeviceD3D();
@@ -62,5 +62,6 @@ private:
 
     std::filesystem::path m_WinDir;
     std::filesystem::path m_ExeDir;
-    std::filesystem::path m_TmpTextFilePath;
+    std::filesystem::path m_ReadTmpTextFilePath;
+    std::filesystem::path m_WriteTmpTextFilePath;
 };

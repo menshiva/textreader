@@ -11,13 +11,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     Win32App app(L"TextReader", 1280, 720, errorMsgOpt);
     if (errorMsgOpt.has_value()) {
-        fatalError(errorMsgOpt.value());
+        fatalError(*errorMsgOpt);
         return 1;
     }
 
     Ui ui(app, errorMsgOpt);
     if (errorMsgOpt.has_value()) {
-        fatalError(errorMsgOpt.value());
+        fatalError(*errorMsgOpt);
         return 1;
     }
 

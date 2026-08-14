@@ -15,7 +15,7 @@ void TextView::reset(Source source) {
 }
 
 void TextView::draw() {
-    if (!m_Source.getLine)
+    if (!m_Source.getLine || !m_Source.getTextSize)
         return;
 
     ImGui::BeginChild(
@@ -27,15 +27,18 @@ void TextView::draw() {
     const auto windowRegionSize = ImGui::GetContentRegionAvail();
     const ImVec2 fontSize{ImGui::GetFontBaked()->GetCharAdvance('0'), ImGui::GetTextLineHeight()};
 
+    uint64_t sourceTextSize[2] = {0, 0};
+    m_Source.getTextSize(sourceTextSize[0], sourceTextSize[1]);
+
     LayoutData layoutData;
-    if (!computeLayoutData(windowRegionMin, windowRegionSize, fontSize, m_Source.maxNum[0], m_Source.maxNum[1], layoutData)) {
+    if (!computeLayoutData(windowRegionMin, windowRegionSize, fontSize, sourceTextSize[0], sourceTextSize[1], layoutData)) {
         ImGui::EndChild();
         return;
     }
 
     updateAnimation(fontSize);
     for (int i = 0; i < 2; ++i)
-        clampScrollData(fontSize, layoutData, m_Source.maxNum[i], i);
+        clampScrollData(fontSize, layoutData, sourceTextSize[i], i);
 
     const auto dl = ImGui::GetWindowDrawList();
 
@@ -54,9 +57,10 @@ void TextView::draw() {
         dl->PushClipRect(gutterRegion.Min, gutterRegion.Max, true);
         for (uint64_t i = 0; i < layoutData.xyMetrics[1].reservedNum + 1; ++i) {
             const uint64_t lineNo = m_xyScrollData[1].firstIdx + i;
-            if (lineNo >= m_Source.maxNum[1])
+            if (lineNo >= sourceTextSize[1])
                 break;
 
+            // TODO: sub-pixel needed?
             const float y = std::floor(gutterRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[1].pixelOffsetRemainder);
 
             char buf[24];
@@ -84,14 +88,15 @@ void TextView::draw() {
     }
 
     // scrollbars
+    const bool isWindowHovered = ImGui::IsWindowHovered();
     for (int i = 0; i < 2; ++i) {
-        if (const auto sbDataPtr = layoutData.xyScrollbarDataOpt[i].has_value() ? &layoutData.xyScrollbarDataOpt[i].value() : nullptr) {
+        if (const auto sbDataPtr = layoutData.xyScrollbarDataOpt[i].has_value() ? &*layoutData.xyScrollbarDataOpt[i] : nullptr) {
             const auto& scrollData = m_xyScrollData[i];
 
             auto colorPtr = &scrollbarColor;
             if (scrollData.scrollbarDragOffsetOpt.has_value())
                 colorPtr = &scrollbarActiveColor;
-            else if (ImGui::IsWindowHovered() && sbDataPtr->region.Contains(ImGui::GetIO().MousePos))
+            else if (isWindowHovered && sbDataPtr->region.Contains(ImGui::GetIO().MousePos))
                 colorPtr = &scrollbarHoveredColor;
 
             const float grab = computeScrollbarGrab(fontSize, *sbDataPtr, i);
@@ -112,27 +117,30 @@ void TextView::draw() {
 
     // text view
     m_MaxVisibleLineLength = 0;
-    if (const auto tvDataPtr = layoutData.textViewDataOpt.has_value() ? &layoutData.textViewDataOpt.value() : nullptr) {
+    if (const auto tvDataPtr = layoutData.textViewDataOpt.has_value() ? &*layoutData.textViewDataOpt : nullptr) {
         const auto& textViewRegion = tvDataPtr->region;
         dl->PushClipRect(textViewRegion.Min,textViewRegion.Max, true);
         for (uint64_t i = 0; i < layoutData.xyMetrics[1].reservedNum + 1; ++i) {
             const uint64_t lineNo = m_xyScrollData[1].firstIdx + i;
-            if (lineNo >= m_Source.maxNum[1])
+            if (lineNo >= sourceTextSize[1])
                 break;
 
+            // TODO: sub-pixel needed?
             const float y = std::floor(textViewRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[1].pixelOffsetRemainder);
 
             uint64_t totalLineLength = 0;
             const auto s = m_Source.getLine(lineNo, m_xyScrollData[0].firstIdx, layoutData.xyMetrics[0].reservedNum + 1, totalLineLength);
             if (totalLineLength > m_MaxVisibleLineLength)
                 m_MaxVisibleLineLength = totalLineLength;
+            if (s.empty())
+                continue;
 
             dl->AddText(ImVec2(textViewRegion.Min.x - m_xyScrollData[0].pixelOffsetRemainder, y), textColor, s.data(), s.data() + s.size());
         }
         dl->PopClipRect();
     }
 
-    handleInput(layoutData, fontSize);
+    handleInput(layoutData, fontSize, sourceTextSize[1]);
 
     ImGui::EndChild();
 }
@@ -298,7 +306,7 @@ bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& 
 
     const LayoutData::ScrollbarData* sbPtrs[2];
     for (int i = 0; i < 2; ++i) {
-        sbPtrs[i] = layoutData.xyScrollbarDataOpt[i].has_value() ? &layoutData.xyScrollbarDataOpt[i].value() : nullptr;
+        sbPtrs[i] = layoutData.xyScrollbarDataOpt[i].has_value() ? &*layoutData.xyScrollbarDataOpt[i] : nullptr;
         if (!sbPtrs[i])
             m_xyScrollData[i].scrollbarDragOffsetOpt.reset();
     }
@@ -348,7 +356,7 @@ bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& 
 
             if (scrollBarDataPtr->travel > 0.0f) {
                 const float rel = std::clamp(
-                    (io.MousePos[i] - scrollData.scrollbarDragOffsetOpt.value() - scrollBarDataPtr->region.Min[i]) / scrollBarDataPtr->travel,
+                    (io.MousePos[i] - *scrollData.scrollbarDragOffsetOpt - scrollBarDataPtr->region.Min[i]) / scrollBarDataPtr->travel,
                     0.0f, 1.0f
                 );
                 setPos(fontSize, static_cast<double>(rel) * scrollBarDataPtr->maxPos, i);
@@ -386,7 +394,7 @@ void TextView::scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, const
     }
 }
 
-void TextView::handleInput(const LayoutData& layoutData, const ImVec2& fontSize) {
+void TextView::handleInput(const LayoutData& layoutData, const ImVec2& fontSize, const uint64_t sourceMaxLinesNum) {
     if (handleScrollbarInput(layoutData, fontSize))
         return;
 
@@ -428,8 +436,8 @@ void TextView::handleInput(const LayoutData& layoutData, const ImVec2& fontSize)
             }
             else {
                 // move to y=last line
-                const double maxVerticalPos = m_Source.maxNum[1] > layoutData.xyMetrics[1].reservedNum
-                    ? static_cast<double>(m_Source.maxNum[1]) - static_cast<double>(layoutData.xyMetrics[1].visibleNumFlt)
+                const double maxVerticalPos = sourceMaxLinesNum > layoutData.xyMetrics[1].reservedNum
+                    ? static_cast<double>(sourceMaxLinesNum) - static_cast<double>(layoutData.xyMetrics[1].visibleNumFlt)
                     : 0.0;
                 animateTo(fontSize, maxVerticalPos, 1);
             }
@@ -461,7 +469,7 @@ void TextView::updateAnimation(const ImVec2& fontSize) {
         if (!sd.currentAnimationOpt.has_value())
             continue;
 
-        auto& anim = sd.currentAnimationOpt.value();
+        auto& anim = *sd.currentAnimationOpt;
         anim.elapsed += dt;
 
         const float t = std::clamp(anim.elapsed / kScrollAnimDuration, 0.0f, 1.0f);

@@ -52,20 +52,23 @@ Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH
         nullptr, nullptr, nullptr, nullptr, m_WindowData.lpClassName,
         nullptr
     };
-    RegisterClassExW(&wc);
+    if (!RegisterClassExW(&wc)) {
+        outErrorMsgOpt = "Cannot register the window class";
+        return;
+    }
     m_WindowData.hwnd = ::CreateWindowW(
         m_WindowData.lpClassName, m_WindowData.initialWindowName, WS_OVERLAPPEDWINDOW, 100, 100,
         static_cast<int>(initW * m_WindowData.dpiScale), static_cast<int>(initH * m_WindowData.dpiScale), nullptr, nullptr, m_WindowData.hInstance, nullptr
     );
     if (!m_WindowData.hwnd) {
-        outErrorMsgOpt = "Error creating a new Window.";
+        outErrorMsgOpt = "Cannot create the window";
         return;
     }
     SetWindowLongPtrW(m_WindowData.hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
     // Initialize Direct3D
     if (!CreateDeviceD3D()) {
-        outErrorMsgOpt = "Error initializing Direct3D.";
+        outErrorMsgOpt = "Cannot initialize Direct3D 11";
         return;
     }
 
@@ -88,12 +91,20 @@ Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH
     {
         wchar_t dir[MAX_PATH + 1];
         const DWORD n = GetTempPathW(MAX_PATH + 1, dir); // always has '\' at the end
-        if (n != 0 && n <= MAX_PATH)
-            m_TmpTextFilePath = std::filesystem::path(dir) / L"TextReader (tmp)";
+        if (n != 0 && n <= MAX_PATH) {
+            m_ReadTmpTextFilePath = std::filesystem::path(dir) / L"TextReader (tmp)";
+            m_WriteTmpTextFilePath = std::filesystem::path(dir) / L"TextReader (tmp write).txt";
+        }
     }
 }
 
 Win32App::~Win32App() {
+    std::error_code ec;
+    if (!m_ReadTmpTextFilePath.empty())
+        std::filesystem::remove(m_ReadTmpTextFilePath, ec);
+    if (!m_WriteTmpTextFilePath.empty())
+        std::filesystem::remove(m_WriteTmpTextFilePath, ec);
+
     CleanupDeviceD3D();
     if (m_WindowData.hwnd)
         DestroyWindow(m_WindowData.hwnd);

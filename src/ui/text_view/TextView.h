@@ -24,6 +24,10 @@ public:
     void reset(Source source = Source{nullptr, nullptr});
     void draw();
 private:
+    enum Axis : int { kAxisX = 0, kAxisY = 1 };
+    static constexpr int kAxisCount = 2;
+    static constexpr Axis kAxes[kAxisCount] = {kAxisX, kAxisY};
+
     struct LayoutData {
         struct FontMetrics {
             float visibleNumFlt;
@@ -33,7 +37,7 @@ private:
 
             uint64_t reservedNum; // fullVisibleNum + (remainder > 0.0f)
         };
-        FontMetrics xyMetrics[2];
+        FontMetrics xyMetrics[kAxisCount];
 
         struct GutterData {
             ImRect region;
@@ -42,10 +46,10 @@ private:
         struct ScrollbarData {
             ImRect region;
             double maxPos;
-            float grab;
+            float grabSize;
             float travel;
         };
-        std::optional<ScrollbarData> xyScrollbarDataOpt[2];
+        std::optional<ScrollbarData> xyScrollbarDataOpt[kAxisCount];
 
         struct TextViewData {
             ImRect region;
@@ -57,6 +61,10 @@ private:
         uint64_t sourceMaxLineLength, uint64_t sourceMaxLinesNum,
         LayoutData& outData
     ) const;
+
+    void drawGutter(const LayoutData& layoutData, const ImVec2& fontSize, uint64_t sourceLinesNum) const;
+    void drawScrollbars(const LayoutData& layoutData, const ImVec2& fontSize) const;
+    void drawText(const LayoutData& layoutData, const ImVec2& fontSize, uint64_t sourceLinesNum);
 
     struct ScrollData {
         uint64_t firstIdx = 0;
@@ -71,18 +79,22 @@ private:
         std::optional<Animation> currentAnimationOpt;
     };
 
-    void clampScrollData(const ImVec2& fontSize, const LayoutData& layoutData, uint64_t sourceMax, int idx);
-    float computeScrollbarGrab(const ImVec2& fontSize, const LayoutData::ScrollbarData& scrollBarData, int idx) const;
+    void clampScrollData(const ImVec2& fontSize, const LayoutData& layoutData, uint64_t sourceMax, Axis axis);
+    float computeScrollbarGrab(const ImVec2& fontSize, const LayoutData::ScrollbarData& scrollBarData, Axis axis) const;
 
-    bool handleScrollbarInput(const LayoutData& layoutData, const ImVec2& fontSize);
-    void scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, int idx);
+    void scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, Axis axis);
+
     void handleInput(const LayoutData& layoutData, const ImVec2& fontSize, uint64_t sourceMaxLinesNum);
+    bool handleScrollbarInput(const LayoutData& layoutData, const ImVec2& fontSize);
+    void handleSelectionInput(const LayoutData& layoutData, const ImVec2& fontSize, uint64_t sourceMaxLinesNum);
+    void handleWheelInput(const ImVec2& fontSize);
+    void handleKeyboardInput(const LayoutData& layoutData, const ImVec2& fontSize, uint64_t sourceMaxLinesNum);
 
-    double getCurrentPos(const ImVec2& fontSize, int idx) const;
-    void setPos(const ImVec2& fontSize, double pos, int idx);
+    double getCurrentPos(const ImVec2& fontSize, Axis axis) const;
+    void setPos(const ImVec2& fontSize, double pos, Axis axis);
 
     void updateAnimation(const ImVec2& fontSize);
-    void animateTo(const ImVec2& fontSize, double targetPos, int idx);
+    void animateTo(const ImVec2& fontSize, double targetPos, Axis axis);
 
     struct TextPos { uint64_t col = 0; uint64_t line = 0; };
     TextPos getPosFromMouse(const LayoutData::TextViewData& textViewData, const ImVec2& fontSize, uint64_t sourceMaxLinesNum) const;
@@ -92,7 +104,7 @@ private:
     Ui& m_ParentUi;
 
     Source m_Source;
-    ScrollData m_xyScrollData[2];
+    ScrollData m_xyScrollData[kAxisCount];
     uint64_t m_MaxVisibleLineLength = 0;
 
     // start could be > than stop!!!

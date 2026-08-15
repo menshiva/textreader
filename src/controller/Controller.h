@@ -18,22 +18,28 @@ public:
     Controller(Controller&&) noexcept = delete;
     Controller& operator=(Controller&&) noexcept = delete;
 
-    void process(const Command& command) { std::visit(*this, command); }
-    void tick() const;
-
-    void operator()(const cmd::OpenFile&);
-    void operator()(const cmd::OpenUrl&);
-    void operator()(const cmd::GenRandom& cmd);
-    void operator()(const cmd::SaveAs&);
-    void operator()(const cmd::Close&);
+    void process(const Command& command);
+    void tick();
 private:
+    struct CommandVisitor {
+        Controller& controller;
+
+        void operator()(const cmd::OpenFile&) const;
+        void operator()(const cmd::OpenUrl& cmd) const;
+        void operator()(const cmd::GenRandom& cmd) const;
+        void operator()(const cmd::SaveAs&) const;
+        void operator()(const cmd::Close&) const;
+    };
+
     std::string_view getTextDataImpl(uint64_t lineIdx, uint64_t fromCol, uint64_t colsNum, uint64_t& outLineTotalLength) const;
     void getTextDataSizeImpl(uint64_t& maxColsNum, uint64_t& rowsNum) const;
 
     bool isReadingFromTmp() const;
     void removeTmpFiles(bool r, bool w) const;
-    void exchangeTmpFiles() const;
     void openGeneratedTmpFile();
+
+    Win32App& m_App;
+    Ui& m_Ui;
 
     template <typename Payload>
     void confirmJobCancelThen(std::string question, Job<Payload>& job, std::function<void()> then) {
@@ -89,7 +95,4 @@ private:
     void onSaveJobFinished(std::optional<std::string> errorOpt, bool wasCancelled);
 
     void closeImpl(std::function<void()> deferredFunc = nullptr);
-
-    Win32App& m_App;
-    Ui& m_Ui;
 };

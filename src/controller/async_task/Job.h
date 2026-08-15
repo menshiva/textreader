@@ -37,13 +37,13 @@ public:
         }, std::move(onDone));
     }
 
-    void checkFinished() const {
-        if (m_TaskPtr)
-            m_TaskPtr->checkFinished();
+    void checkFinished() {
+        if (m_TaskPtr && m_TaskPtr->producedResults()) {
+            const auto keepAlive = std::move(m_TaskPtr); // it must not die inside its own call
+            keepAlive->join();
+        }
     }
 
-    // marks the task cancelled and invokes `deferred` once the worker has actually stopped
-    // if nothing is running, `deferred` runs immediately
     void cancel(std::function<void()> deferred = nullptr) const {
         if (m_TaskPtr) {
             if (m_ProgressPtr)

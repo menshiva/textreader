@@ -20,11 +20,11 @@ public:
     AsyncTask(AsyncTask&&) noexcept = delete;
     AsyncTask& operator=(AsyncTask&&) noexcept = delete;
 
-    void checkFinished();
-
     void requestCancel(std::function<void()> deferredCallback = nullptr);
+    void join();
 
-    void unbindCallbacks();
+    // true once the worker has produced its result and the callbacks have not fired yet
+    bool producedResults() const { return m_Running && m_Finished.load(std::memory_order_acquire); }
 private:
     bool m_Running = true;
 

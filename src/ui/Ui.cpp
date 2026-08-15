@@ -63,306 +63,313 @@ void Ui::newFrame() {
 }
 
 void Ui::build() {
-    auto& io = ImGui::GetIO();
+    drawMainWindow();
+    drawProgress();
+}
+
+void Ui::drawMainWindow() {
     const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(mainViewport->WorkPos);
+    ImGui::SetNextWindowSize(mainViewport->WorkSize);
 
-    {
-        ImGui::SetNextWindowPos(mainViewport->WorkPos);
-        ImGui::SetNextWindowSize(mainViewport->WorkSize);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0)); // remove padding - useful for text view
+    ImGui::Begin(
+        "Main window", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+        | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBringToFrontOnFocus
+    );
+    ImGui::PopStyleVar();
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0)); // remove padding - useful for text view
-        ImGui::Begin(
-            "Main window", nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
-            | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBringToFrontOnFocus
-        );
-        ImGui::PopStyleVar();
+    if (m_FileOpen)
+        m_TextView.draw();
 
-        if (m_FileOpen)
-            m_TextView.draw();
+    Popups pending;
+    drawMenuBar(pending);
+    processShortcuts(pending);
+    drawModals(pending);
 
-        // menu bar
-        bool openGenText = false;
-        bool openUrlPrompt = false;
-        if (ImGui::BeginMenuBar()) {
-            if (ImGui::BeginMenu("File")) {
-                if (ImGui::MenuItem("Open...", "Ctrl+O"))
-                    execCommand(cmd::OpenFile());
-                if (ImGui::MenuItem("From URL...", "Ctrl+U"))
-                    openUrlPrompt = true;
-                if (ImGui::MenuItem("Generate...", "Ctrl+G"))
-                    openGenText = true;
+    ImGui::End();
+}
 
-                if (m_FileOpen) {
-                    ImGui::Separator();
+void Ui::drawMenuBar(Popups& outPopups) const {
+    if (!ImGui::BeginMenuBar())
+        return;
 
-                    if (ImGui::MenuItem("Save as...", "Ctrl+S"))
-                        execCommand(cmd::SaveAs());
+    if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("Open...", "Ctrl+O"))
+            execCommand(cmd::OpenFile());
+        if (ImGui::MenuItem("From URL...", "Ctrl+U"))
+            outPopups.url = true;
+        if (ImGui::MenuItem("Generate...", "Ctrl+G"))
+            outPopups.genText = true;
 
-                    ImGui::Separator();
+        if (m_FileOpen) {
+            ImGui::Separator();
 
-                    if (ImGui::MenuItem("Close"))
-                        execCommand(cmd::Close());
-                }
+            if (ImGui::MenuItem("Save as...", "Ctrl+S"))
+                execCommand(cmd::SaveAs());
 
-                ImGui::EndMenu();
-            }
-            ImGui::EndMenuBar();
+            ImGui::Separator();
+
+            if (ImGui::MenuItem("Close"))
+                execCommand(cmd::Close());
         }
 
-        // shortcuts
-        {
-            if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && !ImGui::IsAnyItemActive()) {
-                if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O)) {
-                    io.ClearInputKeys();
-                    execCommand(cmd::OpenFile());
-                }
-                if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_U))
-                    openUrlPrompt = true;
-                if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_G))
-                    openGenText = true;
+        ImGui::EndMenu();
+    }
+    ImGui::EndMenuBar();
+}
 
-                if (m_FileOpen) {
-                    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S)) {
-                        io.ClearInputKeys();
-                        execCommand(cmd::SaveAs());
-                    }
-                }
-            }
-        }
+void Ui::processShortcuts(Popups& outPopups) const {
+    if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) || ImGui::IsAnyItemActive())
+        return;
 
-        // modal opening
-        {
-            if (openGenText)
-                ImGui::OpenPopup("Generate txt");
-            if (openUrlPrompt)
-                ImGui::OpenPopup("Open from URL");
-            if (!m_InfoMsgData.infoMsg.empty())
-                if (!ImGui::IsPopupOpen("##info"))
-                    ImGui::OpenPopup("##info");
-            if (!m_ErrorMsg.empty()) {
-                if (!ImGui::IsPopupOpen("Error"))
-                    ImGui::OpenPopup("Error");
-            }
-        }
+    auto& io = ImGui::GetIO();
 
-        // modals
-        {
-            ImGui::SetNextWindowPos(mainViewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            if (ImGui::BeginPopupModal(
-                "Open from URL", nullptr,
-                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
-            )) {
-                if (ImGui::IsWindowAppearing())
-                    ImGui::SetKeyboardFocusHere();
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24.0f);
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O)) {
+        io.ClearInputKeys();
+        execCommand(cmd::OpenFile());
+    }
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_U))
+        outPopups.url = true;
+    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_G))
+        outPopups.genText = true;
 
-                static char urlBuf[2048] = "";
-                const bool enter = ImGui::InputTextWithHint("##url", "URL", urlBuf, IM_COUNTOF(urlBuf), ImGuiInputTextFlags_EnterReturnsTrue);
+    if (m_FileOpen && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S)) {
+        io.ClearInputKeys();
+        execCommand(cmd::SaveAs());
+    }
+}
 
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
+void Ui::drawModals(const Popups& popups) {
+    if (popups.genText)
+        ImGui::OpenPopup("Generate txt");
+    if (popups.url)
+        ImGui::OpenPopup("Open from URL");
+    if (!m_InfoMsgData.infoMsg.empty() && !ImGui::IsPopupOpen("##info"))
+        ImGui::OpenPopup("##info");
+    if (!m_ErrorMsg.empty() && !ImGui::IsPopupOpen("Error"))
+        ImGui::OpenPopup("Error");
 
-                const bool openDisabled = urlBuf[0] == '\0';
-                if (openDisabled)
-                    ImGui::BeginDisabled();
-                if (ImGui::Button("Open", ImVec2(-FLT_MIN, 0.0f)) || (enter && !openDisabled)) {
-                    execCommand(cmd::OpenUrl(urlBuf));
-                    ImGui::CloseCurrentPopup();
-                }
-                if (openDisabled)
-                    ImGui::EndDisabled();
+    drawUrlModal();
+    drawGenTextModal();
+    drawInfoModal();
+    drawErrorModal();
+}
 
-                if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
-                    ImGui::CloseCurrentPopup();
+static bool beginCenteredModal(const char* name) {
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    return ImGui::BeginPopupModal(
+        name, nullptr,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
+    );
+}
 
-                ImGui::EndPopup();
-            }
+void Ui::drawUrlModal() const {
+    if (!beginCenteredModal("Open from URL"))
+        return;
 
-            ImGui::SetNextWindowPos(mainViewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            if (ImGui::BeginPopupModal(
-                "Generate txt", nullptr,
-                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
-            )) {
-                if (ImGui::IsWindowAppearing())
-                    ImGui::SetKeyboardFocusHere();
+    if (ImGui::IsWindowAppearing())
+        ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24.0f);
 
-                static int genTxtValue = 1;
-                ImGui::InputInt("##GenTxtInput", &genTxtValue, 0, 0);
+    static char urlBuf[2048] = "";
+    const bool enter = ImGui::InputTextWithHint("##url", "URL", urlBuf, IM_COUNTOF(urlBuf), ImGuiInputTextFlags_EnterReturnsTrue);
 
-                ImGui::SameLine();
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
 
-                constexpr static const char* genTxtComboItems[] = { "Kb", "Mb", "Gb", "Lines" };
-                static int genTxtItemIdx = 1;
-                if (ImGui::BeginCombo("##GenTxtCombo", genTxtComboItems[genTxtItemIdx], ImGuiComboFlags_WidthFitPreview)) {
-                    for (int n = 0; n < IM_COUNTOF(genTxtComboItems); ++n) {
-                        const bool is_selected = genTxtItemIdx == n;
-                        if (ImGui::Selectable(genTxtComboItems[n], is_selected))
-                            genTxtItemIdx = n;
-                        if (is_selected)
-                            ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
+    const bool openDisabled = urlBuf[0] == '\0';
+    if (openDisabled)
+        ImGui::BeginDisabled();
+    if (ImGui::Button("Open", ImVec2(-FLT_MIN, 0.0f)) || (enter && !openDisabled)) {
+        execCommand(cmd::OpenUrl(urlBuf));
+        ImGui::CloseCurrentPopup();
+    }
+    if (openDisabled)
+        ImGui::EndDisabled();
 
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
+    if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+        ImGui::CloseCurrentPopup();
 
-                const bool genButtonDisabled = genTxtValue < 1;
-                if (genButtonDisabled)
-                    ImGui::BeginDisabled();
-                if (ImGui::Button("Generate", ImVec2(-FLT_MIN, 0.0f))) {
-                    execCommand(cmd::GenRandom(static_cast<uint32_t>(genTxtValue), static_cast<cmd::GenRandom::Type>(genTxtItemIdx)));
-                    ImGui::CloseCurrentPopup();
-                }
-                if (genButtonDisabled)
-                    ImGui::EndDisabled();
+    ImGui::EndPopup();
+}
 
-                if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
-                    ImGui::CloseCurrentPopup();
+void Ui::drawGenTextModal() const {
+    if (!beginCenteredModal("Generate txt"))
+        return;
 
-                ImGui::EndPopup();
-            }
+    if (ImGui::IsWindowAppearing())
+        ImGui::SetKeyboardFocusHere();
 
-            ImGui::SetNextWindowPos(mainViewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            if (ImGui::BeginPopupModal(
-                "##info", nullptr,
-                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
-            )) {
-                ImGui::TextUnformatted(m_InfoMsgData.infoMsg.c_str(), m_InfoMsgData.infoMsg.c_str() + m_InfoMsgData.infoMsg.size());
+    static int genTxtValue = 1;
+    ImGui::InputInt("##GenTxtInput", &genTxtValue, 0, 0);
 
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
+    ImGui::SameLine();
 
-                if (ImGui::IsWindowAppearing())
-                    ImGui::SetKeyboardFocusHere();
-
-                if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
-                    const auto data = std::move(m_InfoMsgData);
-                    ImGui::CloseCurrentPopup();
-                    if (data.callback)
-                        data.callback(true);
-                }
-
-                if (m_InfoMsgData.callback && ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f))) {
-                    const auto data = std::move(m_InfoMsgData);
-                    ImGui::CloseCurrentPopup();
-                    data.callback(false);
-                }
-
+    static constexpr const char* genTxtComboItems[] = { "Kb", "Mb", "Gb", "Lines" };
+    static int genTxtItemIdx = 1;
+    if (ImGui::BeginCombo("##GenTxtCombo", genTxtComboItems[genTxtItemIdx], ImGuiComboFlags_WidthFitPreview)) {
+        for (int n = 0; n < IM_COUNTOF(genTxtComboItems); ++n) {
+            const bool isSelected = genTxtItemIdx == n;
+            if (ImGui::Selectable(genTxtComboItems[n], isSelected))
+                genTxtItemIdx = n;
+            if (isSelected)
                 ImGui::SetItemDefaultFocus();
-                ImGui::EndPopup();
-            }
-
-            ImGui::SetNextWindowPos(mainViewport->GetWorkCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            if (ImGui::BeginPopupModal(
-                "Error", nullptr,
-                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
-            )) {
-                ImGui::TextUnformatted(m_ErrorMsg.c_str(), m_ErrorMsg.c_str() + m_ErrorMsg.size());
-
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-
-                if (ImGui::IsWindowAppearing())
-                    ImGui::SetKeyboardFocusHere();
-
-                if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
-                    m_ErrorMsg.clear();
-                    ImGui::CloseCurrentPopup();
-                }
-
-                ImGui::SetItemDefaultFocus();
-                ImGui::EndPopup();
-            }
         }
-
-        ImGui::End();
+        ImGui::EndCombo();
     }
 
-    // loading tasks window
-    {
-        const auto& windowBg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
-        const auto& menuBg = ImGui::GetStyleColorVec4(ImGuiCol_MenuBarBg);
-        ImGui::PushStyleColor(ImGuiCol_TitleBg, menuBg);
-        ImGui::PushStyleColor(ImGuiCol_TitleBgActive, menuBg);
-        ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, menuBg);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(menuBg.x, menuBg.y, menuBg.z, windowBg.w));
-        // ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowTitleAlign, ImVec2(0.5f, 0.5f));
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
 
-        const auto& viewportMin = mainViewport->WorkPos;
-        const auto& viewportMax = viewportMin + mainViewport->WorkSize;
+    const bool genButtonDisabled = genTxtValue < 1;
+    if (genButtonDisabled)
+        ImGui::BeginDisabled();
+    if (ImGui::Button("Generate", ImVec2(-FLT_MIN, 0.0f))) {
+        execCommand(cmd::GenRandom(static_cast<uint32_t>(genTxtValue), static_cast<cmd::GenRandom::Type>(genTxtItemIdx)));
+        ImGui::CloseCurrentPopup();
+    }
+    if (genButtonDisabled)
+        ImGui::EndDisabled();
 
-        ImGui::SetNextWindowPos(ImVec2(viewportMax.x - 24.0f, viewportMin.y), 0, ImVec2(1.0f, 0.0f));
-        ImGui::SetNextWindowCollapsed(false, ImGuiCond_Once);
+    if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+        ImGui::CloseCurrentPopup();
 
-        ImGui::Begin(
-            "Loading tasks###progress", nullptr,
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
-            | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav
-        );
-        ImGui::PopStyleColor(4);
-        ImGui::PopStyleVar(2);
+    ImGui::EndPopup();
+}
 
-        constexpr static float width = 320.0f;
-        ImGui::Dummy(ImVec2(width, 0.0f));
+void Ui::drawInfoModal() {
+    if (!beginCenteredModal("##info"))
+        return;
 
-        int i = 0;
-        char buf[64];
-        for (auto& progressData : m_ProgressDataQueue) {
-            ImGui::PushID(i); // for ImGui::CloseButton()
+    ImGui::TextUnformatted(m_InfoMsgData.infoMsg.c_str(), m_InfoMsgData.infoMsg.c_str() + m_InfoMsgData.infoMsg.size());
 
-            if (i > 0) {
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-            }
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
 
-            float fraction = progressData.progress.load(std::memory_order_relaxed);
-            if (!progressData.cancelled && fraction >= 0.0f) {
-                ImFormatString(buf, IM_COUNTOF(buf), "%s: %.0f%%", progressData.name.c_str(), fraction * 100 + 0.01f);
-            }
-            else {
-                fraction = -static_cast<float>(ImGui::GetTime());
-                if (!progressData.cancelled)
-                    ImFormatString(buf, IM_COUNTOF(buf), "%s...", progressData.name.c_str());
-                else
-                    ImFormatString(buf, IM_COUNTOF(buf), "%s: cancelling...", progressData.name.c_str());
-            }
-            ImGui::ProgressBar(fraction, ImVec2(width, 0.0f), buf);
+    if (ImGui::IsWindowAppearing())
+        ImGui::SetKeyboardFocusHere();
 
-            if (progressData.cancelClickCallback) {
-                const float buttonSize = ImGui::GetFontSize();
-                const float barHeight = ImGui::GetFrameHeight();
+    if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
+        const auto data = std::move(m_InfoMsgData);
+        ImGui::CloseCurrentPopup();
+        if (data.callback)
+            data.callback(true);
+    }
 
-                ImGui::SameLine();
-                const auto pos = ImGui::GetCursorScreenPos();
+    if (m_InfoMsgData.callback && ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f))) {
+        const auto data = std::move(m_InfoMsgData);
+        ImGui::CloseCurrentPopup();
+        data.callback(false);
+    }
 
-                const bool wasCancelled = progressData.cancelled; // fix ImGui::EndDisabled() when progressData.cancelled becomes true after CloseButton click
-                if (wasCancelled)
-                    ImGui::BeginDisabled();
-                if (ImGui::CloseButton(ImGui::GetID("##cancel"), ImVec2(pos.x, pos.y + (barHeight - buttonSize) * 0.5f))) {
-                    progressData.cancelClickCallback();
-                    progressData.cancelled = true;
-                }
-                if (wasCancelled)
-                    ImGui::EndDisabled();
+    ImGui::SetItemDefaultFocus();
+    ImGui::EndPopup();
+}
 
-                ImGui::Dummy(ImVec2(buttonSize, buttonSize)); // move cursor
-            }
+void Ui::drawErrorModal() {
+    if (!beginCenteredModal("Error"))
+        return;
 
-            ImGui::PopID();
-            ++i;
+    ImGui::TextUnformatted(m_ErrorMsg.c_str(), m_ErrorMsg.c_str() + m_ErrorMsg.size());
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ImGui::IsWindowAppearing())
+        ImGui::SetKeyboardFocusHere();
+
+    if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
+        m_ErrorMsg.clear();
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::SetItemDefaultFocus();
+    ImGui::EndPopup();
+}
+
+void Ui::drawProgress() {
+    const auto& windowBg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+    const auto& menuBg = ImGui::GetStyleColorVec4(ImGuiCol_MenuBarBg);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, menuBg);
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, menuBg);
+    ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, menuBg);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(menuBg.x, menuBg.y, menuBg.z, windowBg.w));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowTitleAlign, ImVec2(0.5f, 0.5f));
+
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    const auto& viewportMin = mainViewport->WorkPos;
+    const auto& viewportMax = viewportMin + mainViewport->WorkSize;
+
+    ImGui::SetNextWindowPos(ImVec2(viewportMax.x - 24.0f, viewportMin.y), 0, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowCollapsed(false, ImGuiCond_Once);
+
+    ImGui::Begin(
+        "Loading tasks###progress", nullptr,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
+        | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav
+    );
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar(2);
+
+    static constexpr float width = 320.0f;
+    ImGui::Dummy(ImVec2(width, 0.0f));
+
+    int i = 0;
+    char buf[64];
+    for (auto& progressData : m_ProgressDataQueue) {
+        ImGui::PushID(i); // for ImGui::CloseButton()
+
+        if (i > 0) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
         }
 
-        ImGui::End();
+        float fraction = progressData.progress.load(std::memory_order_relaxed);
+        if (!progressData.cancelled && fraction >= 0.0f) {
+            ImFormatString(buf, IM_COUNTOF(buf), "%s: %.0f%%", progressData.name.c_str(), fraction * 100 + 0.01f);
+        }
+        else {
+            fraction = -static_cast<float>(ImGui::GetTime());
+            if (!progressData.cancelled)
+                ImFormatString(buf, IM_COUNTOF(buf), "%s...", progressData.name.c_str());
+            else
+                ImFormatString(buf, IM_COUNTOF(buf), "%s: cancelling...", progressData.name.c_str());
+        }
+        ImGui::ProgressBar(fraction, ImVec2(width, 0.0f), buf);
+
+        if (progressData.cancelClickCallback) {
+            const float buttonSize = ImGui::GetFontSize();
+            const float barHeight = ImGui::GetFrameHeight();
+
+            ImGui::SameLine();
+            const auto pos = ImGui::GetCursorScreenPos();
+
+            const bool wasCancelled = progressData.cancelled; // fix ImGui::EndDisabled() when progressData.cancelled becomes true after CloseButton click
+            if (wasCancelled)
+                ImGui::BeginDisabled();
+            if (ImGui::CloseButton(ImGui::GetID("##cancel"), ImVec2(pos.x, pos.y + (barHeight - buttonSize) * 0.5f))) {
+                progressData.cancelClickCallback();
+                progressData.cancelled = true;
+            }
+            if (wasCancelled)
+                ImGui::EndDisabled();
+
+            ImGui::Dummy(ImVec2(buttonSize, buttonSize)); // move cursor
+        }
+
+        ImGui::PopID();
+        ++i;
     }
+
+    ImGui::End();
 }
 
 void Ui::render() {

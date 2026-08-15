@@ -15,28 +15,32 @@ Controller::~Controller() {
     m_Ui.showErrorMsg({});
 }
 
-void Controller::tick() const {
+void Controller::tick() {
     m_OpenJob.checkFinished();
     m_DownloadJob.checkFinished();
     m_GenJob.checkFinished();
     m_SaveJob.checkFinished();
 }
 
-void Controller::operator()(const cmd::OpenFile&) {
-    // ReSharper disable once CppLocalVariableMayBeConst
-    if (auto filePathOpt = m_App.showTextFileDialog(true))
-        openImpl(std::move(*filePathOpt));
+void Controller::process(const Command& command) {
+    std::visit(CommandVisitor{*this}, command);
 }
 
-void Controller::operator()(const cmd::OpenUrl& cmd) {
+void Controller::CommandVisitor::operator()(const cmd::OpenFile&) const {
+    // ReSharper disable once CppLocalVariableMayBeConst
+    if (auto filePathOpt = controller.m_App.showTextFileDialog(true))
+        controller.openImpl(std::move(*filePathOpt));
+}
+
+void Controller::CommandVisitor::operator()(const cmd::OpenUrl& cmd) const {
     if (cmd.url.empty()) {
-        m_Ui.showErrorMsg("No URL provided");
+        controller.m_Ui.showErrorMsg("No URL provided");
         return;
     }
-    downloadImpl(cmd.url);
+    controller.downloadImpl(cmd.url);
 }
 
-void Controller::operator()(const cmd::GenRandom& cmd) {
+void Controller::CommandVisitor::operator()(const cmd::GenRandom& cmd) const {
     uint64_t bytes = 0, lines = 0;
     switch (cmd.type) {
         case cmd::GenRandom::Type::Kb: bytes = static_cast<uint64_t>(cmd.value) << 10; break;
@@ -45,22 +49,22 @@ void Controller::operator()(const cmd::GenRandom& cmd) {
         case cmd::GenRandom::Type::Lines: lines = cmd.value; break;
     }
     if (bytes == 0 && lines == 0) {
-        m_Ui.showErrorMsg("Nothing to generate");
+        controller.m_Ui.showErrorMsg("Nothing to generate");
         return;
     }
-    genImpl(bytes, lines);
+    controller.genImpl(bytes, lines);
 }
 
-void Controller::operator()(const cmd::SaveAs&) {
-    if (m_OpenJob.isAlive()) {
+void Controller::CommandVisitor::operator()(const cmd::SaveAs&) const {
+    if (controller.m_OpenJob.isAlive()) {
         // ReSharper disable once CppLocalVariableMayBeConst
-        if (auto targetFilePathOpt = m_App.showTextFileDialog(false))
-            saveImpl(std::move(*targetFilePathOpt));
+        if (auto targetFilePathOpt = controller.m_App.showTextFileDialog(false))
+            controller.saveImpl(std::move(*targetFilePathOpt));
     }
 }
 
-void Controller::operator()(const cmd::Close&) {
-    closeImpl();
+void Controller::CommandVisitor::operator()(const cmd::Close&) const {
+    controller.closeImpl();
 }
 
 std::string_view Controller::getTextDataImpl(
@@ -93,16 +97,13 @@ void Controller::removeTmpFiles(const bool r, const bool w) const {
         std::filesystem::remove(m_App.getWriteTmpTextFilePath(), ec);
 }
 
-void Controller::exchangeTmpFiles() const {
+void Controller::openGeneratedTmpFile() {
+    // exchange tmp files
     if (!m_App.getReadTmpTextFilePath().empty() && !m_App.getWriteTmpTextFilePath().empty()) {
         std::error_code ec;
         std::filesystem::remove(m_App.getReadTmpTextFilePath(), ec);
         std::filesystem::rename(m_App.getWriteTmpTextFilePath(), m_App.getReadTmpTextFilePath(), ec);
     }
-}
-
-void Controller::openGeneratedTmpFile() {
-    exchangeTmpFiles();
     openImpl(m_App.getReadTmpTextFilePath());
 }
 

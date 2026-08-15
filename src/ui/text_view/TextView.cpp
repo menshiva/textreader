@@ -7,11 +7,11 @@ TextView::TextView(Ui& parentUi) : m_ParentUi(parentUi) {}
 
 void TextView::reset(Source source) {
     m_Source = std::move(source);
-    for (int i = 0; i < 2; ++i) {
-        m_xyScrollData[i].firstIdx = 0;
-        m_xyScrollData[i].pixelOffsetRemainder = 0.0f;
-        m_xyScrollData[i].scrollbarDragOffsetOpt.reset();
-        m_xyScrollData[i].currentAnimationOpt.reset();
+    for (const Axis axis : kAxes) {
+        m_xyScrollData[axis].firstIdx = 0;
+        m_xyScrollData[axis].pixelOffsetRemainder = 0.0f;
+        m_xyScrollData[axis].scrollbarDragOffsetOpt.reset();
+        m_xyScrollData[axis].currentAnimationOpt.reset();
     }
     m_MaxVisibleLineLength = 0;
 
@@ -32,140 +32,144 @@ void TextView::draw() {
     const auto windowRegionSize = ImGui::GetContentRegionAvail();
     const ImVec2 fontSize{ImGui::GetFontBaked()->GetCharAdvance('0'), ImGui::GetTextLineHeight()};
 
-    uint64_t sourceTextSize[2] = {0, 0};
-    m_Source.getTextSize(sourceTextSize[0], sourceTextSize[1]);
+    uint64_t sourceTextSize[kAxisCount] = {0, 0};
+    m_Source.getTextSize(sourceTextSize[kAxisX], sourceTextSize[kAxisY]);
 
     LayoutData layoutData;
-    if (!computeLayoutData(windowRegionMin, windowRegionSize, fontSize, sourceTextSize[0], sourceTextSize[1], layoutData)) {
+    if (!computeLayoutData(windowRegionMin, windowRegionSize, fontSize, sourceTextSize[kAxisX], sourceTextSize[kAxisY], layoutData)) {
         ImGui::EndChild();
         return;
     }
 
     updateAnimation(fontSize);
-    for (int i = 0; i < 2; ++i)
-        clampScrollData(fontSize, layoutData, sourceTextSize[i], i);
 
-    const auto dl = ImGui::GetWindowDrawList();
+    for (const Axis axis : kAxes)
+        clampScrollData(fontSize, layoutData, sourceTextSize[axis], axis);
 
-    const auto textColor = ImGui::GetColorU32(ImGuiCol_Text);
-    const auto disabledTextColor = ImGui::GetColorU32(ImGuiCol_TextDisabled);
-    const auto separatorCol = ImGui::GetColorU32(ImGuiCol_Separator);
+    drawGutter(layoutData, fontSize, sourceTextSize[kAxisY]);
+    drawScrollbars(layoutData, fontSize);
+    drawText(layoutData, fontSize, sourceTextSize[kAxisY]);
 
-    const auto scrollbarActiveColor = ImGui::GetColorU32(ImGuiCol_ScrollbarGrabActive);
-    const auto scrollbarHoveredColor = ImGui::GetColorU32(ImGuiCol_ScrollbarGrabHovered);
-    const auto scrollbarColor = ImGui::GetColorU32(ImGuiCol_ScrollbarGrab);
-
-    // gutter
-    {
-        const auto& gutterRegion = layoutData.gutterData.region;
-
-        dl->PushClipRect(gutterRegion.Min, gutterRegion.Max, true);
-        for (uint64_t i = 0; i < layoutData.xyMetrics[1].reservedNum + 1; ++i) {
-            const uint64_t lineNo = m_xyScrollData[1].firstIdx + i;
-            if (lineNo >= sourceTextSize[1])
-                break;
-
-            const float y = gutterRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[1].pixelOffsetRemainder;
-
-            char buf[24];
-            const auto res = std::to_chars(buf, buf + sizeof(buf), lineNo + 1);
-            const int len = static_cast<int>(res.ptr - buf);
-            const float numberWidth = fontSize.x * static_cast<float>(len);
-            dl->AddText(
-                ImVec2(gutterRegion.Max.x - kGutterTextHorizontalPadding - numberWidth, y),
-                disabledTextColor, buf, buf + len
-            );
-
-            const float sepY = std::floor(y + fontSize.y) - 0.5f; // sub-pixel snap + -0.5f shifts line a little bit so that lines themselves look centered
-            dl->AddLine(
-                ImVec2(gutterRegion.Min.x, sepY), ImVec2(gutterRegion.Max.x, sepY),
-                separatorCol, kGutterLineThickness
-            );
-        }
-        dl->PopClipRect();
-
-        // vertical line to the right of the gutter
-        dl->AddLine(
-            ImVec2(gutterRegion.Max.x, gutterRegion.Min.y), ImVec2(gutterRegion.Max.x, gutterRegion.Max.y),
-            ImGui::GetColorU32(ImGuiCol_Border), kGutterLineThickness
-        );
-    }
-
-    // scrollbars
-    const bool isWindowHovered = ImGui::IsWindowHovered();
-    for (int i = 0; i < 2; ++i) {
-        if (const auto sbDataPtr = layoutData.xyScrollbarDataOpt[i].has_value() ? &*layoutData.xyScrollbarDataOpt[i] : nullptr) {
-            const auto& scrollData = m_xyScrollData[i];
-
-            auto colorPtr = &scrollbarColor;
-            if (scrollData.scrollbarDragOffsetOpt.has_value())
-                colorPtr = &scrollbarActiveColor;
-            else if (isWindowHovered && sbDataPtr->region.Contains(ImGui::GetIO().MousePos))
-                colorPtr = &scrollbarHoveredColor;
-
-            const float grab = computeScrollbarGrab(fontSize, *sbDataPtr, i);
-            if (i == 0) {
-                dl->AddRectFilled(
-                    ImVec2(grab, sbDataPtr->region.Min.y), ImVec2(grab + sbDataPtr->grab, sbDataPtr->region.Max.y),
-                    *colorPtr, kScrollbarSize * 0.5f
-                );
-            }
-            else {
-                dl->AddRectFilled(
-                    ImVec2(sbDataPtr->region.Min.x, grab), ImVec2(sbDataPtr->region.Max.x, grab + sbDataPtr->grab),
-                    *colorPtr, kScrollbarSize * 0.5f
-                );
-            }
-        }
-    }
-
-    // text view
-    m_MaxVisibleLineLength = 0;
-    if (const auto tvDataPtr = layoutData.textViewDataOpt.has_value() ? &*layoutData.textViewDataOpt : nullptr) {
-        const auto& textViewRegion = tvDataPtr->region;
-
-        TextPos selectionFrom, selectionTo;
-        const bool hasSelection = getSelectionRange(selectionFrom, selectionTo);
-        const auto selectionColor = ImGui::GetColorU32(ImGuiCol_TextSelectedBg);
-
-        dl->PushClipRect(textViewRegion.Min,textViewRegion.Max, true);
-        for (uint64_t i = 0; i < layoutData.xyMetrics[1].reservedNum + 1; ++i) {
-            const uint64_t lineNo = m_xyScrollData[1].firstIdx + i;
-            if (lineNo >= sourceTextSize[1])
-                break;
-
-            const float y = textViewRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[1].pixelOffsetRemainder;
-
-            uint64_t totalLineLength = 0;
-            const auto s = m_Source.getLine(lineNo, m_xyScrollData[0].firstIdx, layoutData.xyMetrics[0].reservedNum + 1, totalLineLength);
-            if (totalLineLength > m_MaxVisibleLineLength)
-                m_MaxVisibleLineLength = totalLineLength;
-            if (s.empty())
-                continue;
-
-            const float lineStartX = textViewRegion.Min.x - m_xyScrollData[0].pixelOffsetRemainder;
-
-            // selection
-            if (hasSelection && lineNo >= selectionFrom.line && lineNo <= selectionTo.line) {
-                const uint64_t fromCol = lineNo == selectionFrom.line ? selectionFrom.col : 0;
-                const uint64_t toCol = std::min<uint64_t>(lineNo == selectionTo.line ? selectionTo.col : totalLineLength, totalLineLength);
-                if (fromCol < toCol) {
-                    dl->AddRectFilled(
-                        ImVec2(lineStartX + fontSize.x * (static_cast<float>(fromCol) - static_cast<float>(m_xyScrollData[0].firstIdx)), y),
-                        ImVec2(lineStartX + fontSize.x * (static_cast<float>(toCol) - static_cast<float>(m_xyScrollData[0].firstIdx)), y + fontSize.y),
-                        selectionColor
-                    );
-                }
-            }
-
-            dl->AddText(ImVec2(lineStartX, y), textColor, s.data(), s.data() + s.size());
-        }
-        dl->PopClipRect();
-    }
-
-    handleInput(layoutData, fontSize, sourceTextSize[1]);
+    handleInput(layoutData, fontSize, sourceTextSize[kAxisY]);
 
     ImGui::EndChild();
+}
+
+void TextView::drawGutter(const LayoutData& layoutData, const ImVec2& fontSize, const uint64_t sourceLinesNum) const {
+    const auto dl = ImGui::GetWindowDrawList();
+    const auto& gutterRegion = layoutData.gutterData.region;
+
+    const auto disabledTextColor = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    const auto separatorColor = ImGui::GetColorU32(ImGuiCol_Separator);
+
+    dl->PushClipRect(gutterRegion.Min, gutterRegion.Max, true);
+    for (uint64_t i = 0; i < layoutData.xyMetrics[kAxisY].reservedNum + 1; ++i) {
+        const uint64_t lineNo = m_xyScrollData[kAxisY].firstIdx + i;
+        if (lineNo >= sourceLinesNum)
+            break;
+
+        const float y = gutterRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[kAxisY].pixelOffsetRemainder;
+
+        char buf[24];
+        const auto res = std::to_chars(buf, buf + sizeof(buf), lineNo + 1);
+        const int len = static_cast<int>(res.ptr - buf);
+        const float numberWidth = fontSize.x * static_cast<float>(len);
+        dl->AddText(
+            ImVec2(gutterRegion.Max.x - kGutterTextHorizontalPadding - numberWidth, y),
+            disabledTextColor, buf, buf + len
+        );
+
+        const float sepY = std::floor(y + fontSize.y) - 0.5f; // sub-pixel snap + -0.5f shifts line a little bit so that lines themselves look centered
+        dl->AddLine(
+            ImVec2(gutterRegion.Min.x, sepY), ImVec2(gutterRegion.Max.x, sepY),
+            separatorColor, kGutterLineThickness
+        );
+    }
+    dl->PopClipRect();
+
+    // vertical line to the right of the gutter
+    dl->AddLine(
+        ImVec2(gutterRegion.Max.x, gutterRegion.Min.y), ImVec2(gutterRegion.Max.x, gutterRegion.Max.y),
+        ImGui::GetColorU32(ImGuiCol_Border), kGutterLineThickness
+    );
+}
+
+void TextView::drawScrollbars(const LayoutData& layoutData, const ImVec2& fontSize) const {
+    const auto dl = ImGui::GetWindowDrawList();
+
+    const auto idleColor = ImGui::GetColorU32(ImGuiCol_ScrollbarGrab);
+    const auto hoveredColor = ImGui::GetColorU32(ImGuiCol_ScrollbarGrabHovered);
+    const auto activeColor = ImGui::GetColorU32(ImGuiCol_ScrollbarGrabActive);
+
+    const bool isWindowHovered = ImGui::IsWindowHovered();
+    for (const Axis axis : kAxes) {
+        const auto sbDataPtr = layoutData.xyScrollbarDataOpt[axis].has_value() ? &*layoutData.xyScrollbarDataOpt[axis] : nullptr;
+        if (!sbDataPtr)
+            continue;
+
+        auto colorPtr = &idleColor;
+        if (m_xyScrollData[axis].scrollbarDragOffsetOpt.has_value())
+            colorPtr = &activeColor;
+        else if (isWindowHovered && sbDataPtr->region.Contains(ImGui::GetIO().MousePos))
+            colorPtr = &hoveredColor;
+
+        // the slider is the whole track with the scrolled axis narrowed down to the grab range
+        auto min = sbDataPtr->region.Min;
+        auto max = sbDataPtr->region.Max;
+        min[axis] = computeScrollbarGrab(fontSize, *sbDataPtr, axis);
+        max[axis] = min[axis] + sbDataPtr->grabSize;
+
+        dl->AddRectFilled(min, max, *colorPtr, kScrollbarSize * 0.5f);
+    }
+}
+
+// draws only the lines that are on screen - this is the virtualization the assignment asks for
+void TextView::drawText(const LayoutData& layoutData, const ImVec2& fontSize, const uint64_t sourceLinesNum) {
+    m_MaxVisibleLineLength = 0;
+    if (!layoutData.textViewDataOpt.has_value())
+        return;
+
+    const auto dl = ImGui::GetWindowDrawList();
+    const auto& textViewRegion = layoutData.textViewDataOpt->region;
+
+    const auto textColor = ImGui::GetColorU32(ImGuiCol_Text);
+    const auto selectionColor = ImGui::GetColorU32(ImGuiCol_TextSelectedBg);
+
+    TextPos selectionFrom, selectionTo;
+    const bool hasSelection = getSelectionRange(selectionFrom, selectionTo);
+
+    dl->PushClipRect(textViewRegion.Min, textViewRegion.Max, true);
+    for (uint64_t i = 0; i < layoutData.xyMetrics[kAxisY].reservedNum + 1; ++i) {
+        const uint64_t lineNo = m_xyScrollData[kAxisY].firstIdx + i;
+        if (lineNo >= sourceLinesNum)
+            break;
+
+        uint64_t totalLineLength = 0;
+        const auto s = m_Source.getLine(lineNo, m_xyScrollData[kAxisX].firstIdx, layoutData.xyMetrics[kAxisX].reservedNum + 1, totalLineLength);
+        if (totalLineLength > m_MaxVisibleLineLength)
+            m_MaxVisibleLineLength = totalLineLength;
+        if (s.empty())
+            continue;
+
+        const float y = textViewRegion.Min.y + fontSize.y * static_cast<float>(i) - m_xyScrollData[kAxisY].pixelOffsetRemainder;
+        const float lineStartX = textViewRegion.Min.x - m_xyScrollData[kAxisX].pixelOffsetRemainder;
+
+        if (hasSelection && lineNo >= selectionFrom.line && lineNo <= selectionTo.line) {
+            const uint64_t fromCol = lineNo == selectionFrom.line ? selectionFrom.col : 0;
+            const uint64_t toCol = std::min<uint64_t>(lineNo == selectionTo.line ? selectionTo.col : totalLineLength, totalLineLength);
+            if (fromCol < toCol) {
+                const auto scrolledColsFlt = static_cast<float>(m_xyScrollData[kAxisX].firstIdx);
+                dl->AddRectFilled(
+                    ImVec2(lineStartX + fontSize.x * (static_cast<float>(fromCol) - scrolledColsFlt), y),
+                    ImVec2(lineStartX + fontSize.x * (static_cast<float>(toCol) - scrolledColsFlt), y + fontSize.y),
+                    selectionColor
+                );
+            }
+        }
+
+        dl->AddText(ImVec2(lineStartX, y), textColor, s.data(), s.data() + s.size());
+    }
+    dl->PopClipRect();
 }
 
 bool TextView::computeLayoutData(
@@ -187,7 +191,7 @@ bool TextView::computeLayoutData(
         res.reservedNum = res.fullVisibleNum + static_cast<uint64_t>(res.remainder > 0.0f);
         return res;
     };
-    outData.xyMetrics[1] = computeMetrics(windowRegionSize.y, fontSize.y);
+    outData.xyMetrics[kAxisY] = computeMetrics(windowRegionSize.y, fontSize.y);
 
     const auto getGutterWidth = [&] {
         static constexpr uint64_t maxValueForMinDigitsNum = [] () -> uint64_t {
@@ -199,7 +203,7 @@ bool TextView::computeLayoutData(
 
         // compute digits num to fit into gutter
         uint64_t gutterDigitsNum = kGutterMinDigitsNum;
-        const uint64_t lastVisibleLine = std::min<uint64_t>(sourceMaxLinesNum, m_xyScrollData[1].firstIdx + outData.xyMetrics[1].reservedNum);
+        const uint64_t lastVisibleLine = std::min<uint64_t>(sourceMaxLinesNum, m_xyScrollData[kAxisY].firstIdx + outData.xyMetrics[kAxisY].reservedNum);
         if (lastVisibleLine >= maxValueForMinDigitsNum) {
             uint64_t n = lastVisibleLine;
             gutterDigitsNum = 1;
@@ -214,7 +218,7 @@ bool TextView::computeLayoutData(
     float gutterWidth = getGutterWidth();
 
     const auto getVerticalScrollbarWidth = [&] {
-        if (static_cast<double>(outData.xyMetrics[1].visibleNumFlt) < static_cast<double>(sourceMaxLinesNum))
+        if (static_cast<double>(outData.xyMetrics[kAxisY].visibleNumFlt) < static_cast<double>(sourceMaxLinesNum))
             return kScrollbarSize;
         return 0.0f;
     };
@@ -225,19 +229,19 @@ bool TextView::computeLayoutData(
     };
     float textViewWidth = getTextViewWidth();
 
-    outData.xyMetrics[0] = computeMetrics(textViewWidth, fontSize.x);
+    outData.xyMetrics[kAxisX] = computeMetrics(textViewWidth, fontSize.x);
 
     float horizontalScrollbarHeight = 0.0f;
     float availableRegionHeight = windowRegionSize.y;
-    if (sourceMaxLineLength && static_cast<double>(outData.xyMetrics[0].visibleNumFlt) < static_cast<double>(sourceMaxLineLength)) {
+    if (sourceMaxLineLength && static_cast<double>(outData.xyMetrics[kAxisX].visibleNumFlt) < static_cast<double>(sourceMaxLineLength)) {
         // horizontal scrollbar appeared -> recompute all
         horizontalScrollbarHeight = kScrollbarSize;
         availableRegionHeight = std::max(availableRegionHeight - horizontalScrollbarHeight, 0.0f);
-        outData.xyMetrics[1] = computeMetrics(availableRegionHeight, fontSize.y);
+        outData.xyMetrics[kAxisY] = computeMetrics(availableRegionHeight, fontSize.y);
         gutterWidth = getGutterWidth();
         verticalScrollbarWidth = getVerticalScrollbarWidth();
         textViewWidth = getTextViewWidth();
-        outData.xyMetrics[0] = computeMetrics(textViewWidth, fontSize.x);
+        outData.xyMetrics[kAxisX] = computeMetrics(textViewWidth, fontSize.x);
     }
 
     static constexpr auto computeScrollbarData = [] (
@@ -252,11 +256,11 @@ bool TextView::computeLayoutData(
         data.maxPos = maxNumDbl - visibleNumDbl;
 
         const double visibleFraction = visibleNumDbl / maxNumDbl;
-        data.grab = std::clamp(
+        data.grabSize = std::clamp(
             static_cast<float>(trackSize * visibleFraction),
             std::min(kScrollbarMinGrabSize, trackSize), trackSize
         );
-        data.travel = trackSize - data.grab;
+        data.travel = trackSize - data.grabSize;
 
         return data;
     };
@@ -269,14 +273,14 @@ bool TextView::computeLayoutData(
             ImVec2(windowRegionMin.x, windowRegionMax.y - horizontalScrollbarHeight),
             ImVec2(windowRegionMax.x - verticalScrollbarWidth, windowRegionMax.y)
         );
-        outData.xyScrollbarDataOpt[0].emplace(computeScrollbarData(region, region.GetWidth(), outData.xyMetrics[0], sourceMaxLineLength));
+        outData.xyScrollbarDataOpt[kAxisX].emplace(computeScrollbarData(region, region.GetWidth(), outData.xyMetrics[kAxisX], sourceMaxLineLength));
     }
     if (verticalScrollbarWidth != 0.0f) {
         const ImRect region(
             ImVec2(windowRegionMax.x - verticalScrollbarWidth, windowRegionMin.y),
             ImVec2(windowRegionMax.x, windowRegionMax.y - horizontalScrollbarHeight)
         );
-        outData.xyScrollbarDataOpt[1].emplace(computeScrollbarData(region, region.GetHeight(), outData.xyMetrics[1], sourceMaxLinesNum));
+        outData.xyScrollbarDataOpt[kAxisY].emplace(computeScrollbarData(region, region.GetHeight(), outData.xyMetrics[kAxisY], sourceMaxLinesNum));
     }
 
     {
@@ -290,9 +294,9 @@ bool TextView::computeLayoutData(
     return true;
 }
 
-void TextView::clampScrollData(const ImVec2& fontSize, const LayoutData& layoutData, const uint64_t sourceMax, const int idx) {
-    auto& scrollData = m_xyScrollData[idx];
-    const auto& fontMetrics = layoutData.xyMetrics[idx];
+void TextView::clampScrollData(const ImVec2& fontSize, const LayoutData& layoutData, const uint64_t sourceMax, const Axis axis) {
+    auto& scrollData = m_xyScrollData[axis];
+    const auto& fontMetrics = layoutData.xyMetrics[axis];
 
     if (!sourceMax || !fontMetrics.reservedNum || sourceMax < fontMetrics.reservedNum) {
         scrollData.firstIdx = 0;
@@ -301,7 +305,7 @@ void TextView::clampScrollData(const ImVec2& fontSize, const LayoutData& layoutD
     }
 
     const uint64_t maxFirstCharIdx = sourceMax - fontMetrics.reservedNum;
-    const float maxPixelOffset = fontMetrics.remainder > 0.0f ? fontSize[idx] * (1.0f - fontMetrics.remainder) : 0.0f;
+    const float maxPixelOffset = fontMetrics.remainder > 0.0f ? fontSize[axis] * (1.0f - fontMetrics.remainder) : 0.0f;
 
     if (scrollData.pixelOffsetRemainder < 0.0f)
         scrollData.pixelOffsetRemainder = 0.0f;
@@ -312,43 +316,43 @@ void TextView::clampScrollData(const ImVec2& fontSize, const LayoutData& layoutD
     }
 }
 
-float TextView::computeScrollbarGrab(const ImVec2& fontSize, const LayoutData::ScrollbarData& scrollBarData, const int idx) const {
+float TextView::computeScrollbarGrab(const ImVec2& fontSize, const LayoutData::ScrollbarData& scrollBarData, const Axis axis) const {
     double posFraction = 0.0;
     if (scrollBarData.maxPos > 0.0) {
-        const auto& scrollData = m_xyScrollData[idx];
-        const double currentScrollPos = static_cast<double>(scrollData.firstIdx) + static_cast<double>(scrollData.pixelOffsetRemainder / fontSize[idx]);
+        const auto& scrollData = m_xyScrollData[axis];
+        const double currentScrollPos = static_cast<double>(scrollData.firstIdx) + static_cast<double>(scrollData.pixelOffsetRemainder / fontSize[axis]);
         posFraction = std::clamp(currentScrollPos / scrollBarData.maxPos, 0.0, 1.0);
     }
-    return scrollBarData.region.Min[idx] + static_cast<float>(scrollBarData.travel * posFraction);
+    return scrollBarData.region.Min[axis] + static_cast<float>(scrollBarData.travel * posFraction);
 }
 
 bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& fontSize) {
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
-        for (int i = 0; i < 2; ++i)
-            m_xyScrollData[i].scrollbarDragOffsetOpt.reset();
+        for (const Axis axis : kAxes)
+            m_xyScrollData[axis].scrollbarDragOffsetOpt.reset();
 
-    const LayoutData::ScrollbarData* sbPtrs[2];
-    for (int i = 0; i < 2; ++i) {
-        sbPtrs[i] = layoutData.xyScrollbarDataOpt[i].has_value() ? &*layoutData.xyScrollbarDataOpt[i] : nullptr;
-        if (!sbPtrs[i])
-            m_xyScrollData[i].scrollbarDragOffsetOpt.reset();
+    const LayoutData::ScrollbarData* sbPtrs[kAxisCount];
+    for (const Axis axis : kAxes) {
+        sbPtrs[axis] = layoutData.xyScrollbarDataOpt[axis].has_value() ? &*layoutData.xyScrollbarDataOpt[axis] : nullptr;
+        if (!sbPtrs[axis])
+            m_xyScrollData[axis].scrollbarDragOffsetOpt.reset();
     }
 
     const auto& io = ImGui::GetIO();
 
-    const bool alreadyDragging = m_xyScrollData[0].scrollbarDragOffsetOpt.has_value() || m_xyScrollData[1].scrollbarDragOffsetOpt.has_value();
+    const bool alreadyDragging = m_xyScrollData[kAxisX].scrollbarDragOffsetOpt.has_value() || m_xyScrollData[kAxisY].scrollbarDragOffsetOpt.has_value();
     if (!alreadyDragging && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsWindowHovered()) {
         // drag start
-        for (int i = 0; i < 2; ++i) {
-            const auto scrollBarDataPtr = sbPtrs[i];
+        for (const Axis axis : kAxes) {
+            const auto scrollBarDataPtr = sbPtrs[axis];
             if (scrollBarDataPtr && scrollBarDataPtr->region.Contains(io.MousePos)) {
-                const float mousePos = io.MousePos[i];
-                const float grab = computeScrollbarGrab(fontSize, *scrollBarDataPtr, i);
+                const float mousePos = io.MousePos[axis];
+                const float grab = computeScrollbarGrab(fontSize, *scrollBarDataPtr, axis);
 
-                auto& scrollData = m_xyScrollData[i];
-                if (mousePos >= grab && mousePos <= grab + scrollBarDataPtr->grab) {
-                    // slider drag
-                    scrollData.scrollbarDragOffsetOpt = mousePos - grab;   // схватили ползунок
+                auto& scrollData = m_xyScrollData[axis];
+                if (mousePos >= grab && mousePos <= grab + scrollBarDataPtr->grabSize) {
+                    // grabbed the slider itself
+                    scrollData.scrollbarDragOffsetOpt = mousePos - grab;
                     scrollData.currentAnimationOpt.reset();
                 }
                 else {
@@ -356,12 +360,12 @@ bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& 
                     const float travel = scrollBarDataPtr->travel;
                     if (travel > 0.0f) {
                         const float rel = std::clamp(
-                            (mousePos - scrollBarDataPtr->grab * 0.5f - scrollBarDataPtr->region.Min[i]) / travel,
+                            (mousePos - scrollBarDataPtr->grabSize * 0.5f - scrollBarDataPtr->region.Min[axis]) / travel,
                             0.0f, 1.0f
                         );
-                        animateTo(fontSize, static_cast<double>(rel) * scrollBarDataPtr->maxPos, i);
+                        animateTo(fontSize, static_cast<double>(rel) * scrollBarDataPtr->maxPos, axis);
                     }
-                    scrollData.scrollbarDragOffsetOpt = scrollBarDataPtr->grab * 0.5f;
+                    scrollData.scrollbarDragOffsetOpt = scrollBarDataPtr->grabSize * 0.5f;
                 }
 
                 break;
@@ -370,19 +374,19 @@ bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& 
     }
 
     // process drag
-    for (int i = 0; i < 2; ++i) {
-        const auto scrollBarDataPtr = sbPtrs[i];
-        auto& scrollData = m_xyScrollData[i];
+    for (const Axis axis : kAxes) {
+        const auto scrollBarDataPtr = sbPtrs[axis];
+        auto& scrollData = m_xyScrollData[axis];
         if (scrollBarDataPtr && scrollData.scrollbarDragOffsetOpt.has_value()) {
             if (scrollData.currentAnimationOpt.has_value())
                 return true;
 
             if (scrollBarDataPtr->travel > 0.0f) {
                 const float rel = std::clamp(
-                    (io.MousePos[i] - *scrollData.scrollbarDragOffsetOpt - scrollBarDataPtr->region.Min[i]) / scrollBarDataPtr->travel,
+                    (io.MousePos[axis] - *scrollData.scrollbarDragOffsetOpt - scrollBarDataPtr->region.Min[axis]) / scrollBarDataPtr->travel,
                     0.0f, 1.0f
                 );
-                setPos(fontSize, static_cast<double>(rel) * scrollBarDataPtr->maxPos, i);
+                setPos(fontSize, static_cast<double>(rel) * scrollBarDataPtr->maxPos, axis);
             }
 
             return true;
@@ -392,12 +396,12 @@ bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& 
     return false;
 }
 
-void TextView::scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, const int idx) {
-    auto& scrollData = m_xyScrollData[idx];
+void TextView::scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, const Axis axis) {
+    auto& scrollData = m_xyScrollData[axis];
     scrollData.currentAnimationOpt.reset();
 
-    const float fontSizeVal = fontSize[idx];
-    scrollData.pixelOffsetRemainder += delta[idx] * fontSizeVal;
+    const float fontSizeVal = fontSize[axis];
+    scrollData.pixelOffsetRemainder += delta[axis] * fontSizeVal;
 
     const float deltaUnits = std::floor(scrollData.pixelOffsetRemainder / fontSizeVal);
     scrollData.pixelOffsetRemainder -= deltaUnits * fontSizeVal;
@@ -420,117 +424,129 @@ void TextView::scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, const
 void TextView::handleInput(const LayoutData& layoutData, const ImVec2& fontSize, const uint64_t sourceMaxLinesNum) {
     if (handleScrollbarInput(layoutData, fontSize))
         return;
+    handleSelectionInput(layoutData, fontSize, sourceMaxLinesNum);
+    handleWheelInput(fontSize);
+    handleKeyboardInput(layoutData, fontSize, sourceMaxLinesNum);
+}
+
+void TextView::handleSelectionInput(const LayoutData& layoutData, const ImVec2& fontSize, const uint64_t sourceMaxLinesNum) {
+    if (!layoutData.textViewDataOpt.has_value())
+        return;
+
+    const auto& textViewData = *layoutData.textViewDataOpt;
+    const auto& region = textViewData.region;
+    const auto& mousePos = ImGui::GetIO().MousePos;
+
+    const bool isOverText = ImGui::IsWindowHovered() && region.Contains(mousePos);
+    if (isOverText)
+        ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput);
+
+    if (isOverText && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const auto pos = getPosFromMouse(textViewData, fontSize, sourceMaxLinesNum);
+        m_CurrentSelectionOpt = Selection{pos, pos};
+        m_Selecting = true;
+    }
+
+    if (!m_Selecting)
+        return;
+
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        m_Selecting = false;
+        return;
+    }
+
+    // handle autoscroll
+    {
+        ImVec2 autoScroll(0.0f, 0.0f);
+        if (mousePos.y < region.Min.y) autoScroll.y = (mousePos.y - region.Min.y) / fontSize.y;
+        else if (mousePos.y > region.Max.y) autoScroll.y = (mousePos.y - region.Max.y) / fontSize.y;
+        if (mousePos.x < region.Min.x) autoScroll.x = (mousePos.x - region.Min.x) / fontSize.x;
+        else if (mousePos.x > region.Max.x) autoScroll.x = (mousePos.x - region.Max.x) / fontSize.x;
+
+        for (const Axis axis : kAxes)
+            if (autoScroll[axis] != 0.0f)
+                scrollByPixels(fontSize, autoScroll * kSelectionAutoScrollSpeedModifier, axis);
+    }
+
+    if (m_CurrentSelectionOpt.has_value())
+        m_CurrentSelectionOpt->stop = getPosFromMouse(textViewData, fontSize, sourceMaxLinesNum);
+}
+
+void TextView::handleWheelInput(const ImVec2& fontSize) {
+    if (!ImGui::IsWindowHovered())
+        return;
+
+    ImVec2 delta(0.0f, 0.0f);
+
+    const auto& io = ImGui::GetIO();
+    if (io.MouseWheelH != 0.0f)
+        delta.x = -io.MouseWheelH * kHorizontalCharsPerWheelScroll;
+    if (io.MouseWheel != 0.0f) {
+        if (!io.KeyShift)
+            delta.y = -io.MouseWheel * kVerticalLinesPerWheelScroll;
+        else if (delta.x == 0.0f)
+            delta.x = -io.MouseWheel * kHorizontalCharsPerWheelScroll;
+    }
+
+    for (const Axis axis : kAxes)
+        if (delta[axis] != 0.0f)
+            scrollByPixels(fontSize, delta, axis);
+}
+
+void TextView::handleKeyboardInput(const LayoutData& layoutData, const ImVec2& fontSize, const uint64_t sourceMaxLinesNum) {
+    if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) || ImGui::IsAnyItemActive())
+        return;
 
     const auto& io = ImGui::GetIO();
 
-    // selection
-    if (const auto textViewDataPtr = layoutData.textViewDataOpt.has_value() ? &*layoutData.textViewDataOpt : nullptr) {
-        const auto& region = textViewDataPtr->region;
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false) && sourceMaxLinesNum) {
+        m_CurrentSelectionOpt = Selection{TextPos{0, 0}, TextPos{UINT64_MAX, sourceMaxLinesNum - 1}};
+        m_Selecting = false;
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false))
+        copySelection();
 
-        if (ImGui::IsWindowHovered() && region.Contains(io.MousePos))
-            ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput);
-
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsWindowHovered() && region.Contains(io.MousePos)) {
-            const auto pos = getPosFromMouse(*textViewDataPtr, fontSize, sourceMaxLinesNum);
-            m_CurrentSelectionOpt = Selection{pos, pos};
-            m_Selecting = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_Home, false))
+        animateTo(fontSize, 0.0, io.KeyCtrl ? kAxisY : kAxisX);
+    if (ImGui::IsKeyPressed(ImGuiKey_End, false)) {
+        if (!io.KeyCtrl) {
+            // move to x=length of longest visible line
+            const auto maxVisibleLineLengthDbl = static_cast<double>(m_MaxVisibleLineLength);
+            const auto visibleDbl = static_cast<double>(layoutData.xyMetrics[kAxisX].visibleNumFlt);
+            const double target = maxVisibleLineLengthDbl > visibleDbl ? maxVisibleLineLengthDbl - visibleDbl : 0.0;
+            animateTo(fontSize, target, kAxisX);
         }
-
-        if (m_Selecting) {
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                // handle autoscroll when selecting outside the region bounds (the further out the mouse is, the faster it goes)
-                {
-                    ImVec2 autoScroll(0.0f, 0.0f);
-                    if (io.MousePos.y < region.Min.y) autoScroll.y = (io.MousePos.y - region.Min.y) / fontSize.y;
-                    else if (io.MousePos.y > region.Max.y) autoScroll.y = (io.MousePos.y - region.Max.y) / fontSize.y;
-                    if (io.MousePos.x < region.Min.x) autoScroll.x = (io.MousePos.x - region.Min.x) / fontSize.x;
-                    else if (io.MousePos.x > region.Max.x) autoScroll.x = (io.MousePos.x - region.Max.x) / fontSize.x;
-                    for (int i = 0; i < 2; ++i)
-                        if (autoScroll[i] != 0.0f)
-                            scrollByPixels(fontSize, autoScroll * kSelectionAutoScrollSpeedModifier, i);
-                }
-                if (m_CurrentSelectionOpt.has_value())
-                    m_CurrentSelectionOpt->stop = getPosFromMouse(*textViewDataPtr, fontSize, sourceMaxLinesNum);
-            }
-            else {
-                m_Selecting = false;
-            }
+        else {
+            // move to y=last line
+            const double maxVerticalPos = sourceMaxLinesNum > layoutData.xyMetrics[kAxisY].reservedNum
+                ? static_cast<double>(sourceMaxLinesNum) - static_cast<double>(layoutData.xyMetrics[kAxisY].visibleNumFlt)
+                : 0.0;
+            animateTo(fontSize, maxVerticalPos, kAxisY);
         }
     }
 
-    // mouse wheel
-    if (ImGui::IsWindowHovered()) {
-        ImVec2 delta(0.0f, 0.0f);
-        if (io.MouseWheelH != 0.0f)
-            delta.x = -io.MouseWheelH * kHorizontalCharsPerWheelScroll;
-        if (io.MouseWheel != 0.0f) {
-            if (!io.KeyShift)
-                delta.y = -io.MouseWheel * kVerticalLinesPerWheelScroll;
-            else {
-                if (delta.x == 0.0f)
-                    delta.x = -io.MouseWheel * kHorizontalCharsPerWheelScroll;
-            }
-        }
-        for (int i = 0; i < 2; ++i)
-            if (delta[i] != 0.0f)
-                scrollByPixels(fontSize, delta, i);
-    }
-
-    // keyboard
-    if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && !ImGui::IsAnyItemActive()) {
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false) && sourceMaxLinesNum) {
-            m_CurrentSelectionOpt = Selection{TextPos{0, 0}, TextPos{UINT64_MAX, sourceMaxLinesNum - 1}};
-            m_Selecting = false;
-        }
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false))
-            copySelection();
-
-        if (ImGui::IsKeyPressed(ImGuiKey_Home, false)) {
-            if (!io.KeyCtrl)
-                animateTo(fontSize, 0.0, 0); // move to x=0
-            else
-                animateTo(fontSize, 0.0, 1); // move to y=0
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_End, false)) {
-            if (!io.KeyCtrl) {
-                // move to x=length of longest visible line
-                const auto maxVisibleLineLengthDbl = static_cast<double>(m_MaxVisibleLineLength);
-                const auto visibleDbl = static_cast<double>(layoutData.xyMetrics[0].visibleNumFlt);
-                const double target = maxVisibleLineLengthDbl > visibleDbl ? maxVisibleLineLengthDbl - visibleDbl : 0.0;
-                animateTo(fontSize, target, 0);
-            }
-            else {
-                // move to y=last line
-                const double maxVerticalPos = sourceMaxLinesNum > layoutData.xyMetrics[1].reservedNum
-                    ? static_cast<double>(sourceMaxLinesNum) - static_cast<double>(layoutData.xyMetrics[1].visibleNumFlt)
-                    : 0.0;
-                animateTo(fontSize, maxVerticalPos, 1);
-            }
-        }
-
-        const double pageLinesNum = static_cast<double>(layoutData.xyMetrics[1].fullVisibleNum);
-        if (ImGui::IsKeyPressed(ImGuiKey_PageDown, true))
-            animateTo(fontSize, getCurrentPos(fontSize, 1) + pageLinesNum, 1);
-        if (ImGui::IsKeyPressed(ImGuiKey_PageUp, true))
-            animateTo(fontSize, getCurrentPos(fontSize, 1) - pageLinesNum, 1);
-    }
+    const double pageLinesNumDbl = static_cast<double>(layoutData.xyMetrics[kAxisY].fullVisibleNum);
+    if (ImGui::IsKeyPressed(ImGuiKey_PageDown, true))
+        animateTo(fontSize, getCurrentPos(fontSize, kAxisY) + pageLinesNumDbl, kAxisY);
+    if (ImGui::IsKeyPressed(ImGuiKey_PageUp, true))
+        animateTo(fontSize, getCurrentPos(fontSize, kAxisY) - pageLinesNumDbl, kAxisY);
 }
 
-double TextView::getCurrentPos(const ImVec2 &fontSize, const int idx) const {
-    return static_cast<double>(m_xyScrollData[idx].firstIdx) + static_cast<double>(m_xyScrollData[idx].pixelOffsetRemainder / fontSize[idx]);
+double TextView::getCurrentPos(const ImVec2 &fontSize, const Axis axis) const {
+    return static_cast<double>(m_xyScrollData[axis].firstIdx) + static_cast<double>(m_xyScrollData[axis].pixelOffsetRemainder / fontSize[axis]);
 }
 
-void TextView::setPos(const ImVec2 &fontSize, const double pos, const int idx) {
+void TextView::setPos(const ImVec2 &fontSize, const double pos, const Axis axis) {
     const double clamped = std::max(0.0, pos);
     const double whole = std::floor(clamped);
-    m_xyScrollData[idx].firstIdx = static_cast<uint64_t>(whole);
-    m_xyScrollData[idx].pixelOffsetRemainder = static_cast<float>((clamped - whole) * fontSize[idx]);
+    m_xyScrollData[axis].firstIdx = static_cast<uint64_t>(whole);
+    m_xyScrollData[axis].pixelOffsetRemainder = static_cast<float>((clamped - whole) * fontSize[axis]);
 }
 
 void TextView::updateAnimation(const ImVec2& fontSize) {
     const float dt = std::min(ImGui::GetIO().DeltaTime, 0.1f);
-    for (int i = 0; i < 2; ++i) {
-        auto& sd = m_xyScrollData[i];
+    for (const Axis axis : kAxes) {
+        auto& sd = m_xyScrollData[axis];
         if (!sd.currentAnimationOpt.has_value())
             continue;
 
@@ -538,21 +554,21 @@ void TextView::updateAnimation(const ImVec2& fontSize) {
         anim.elapsed += dt;
 
         const float t = std::clamp(anim.elapsed / kScrollAnimDuration, 0.0f, 1.0f);
-        setPos(fontSize, anim.startPos + (anim.targetPos - anim.startPos) * static_cast<double>(t), i);
+        setPos(fontSize, anim.startPos + (anim.targetPos - anim.startPos) * static_cast<double>(t), axis);
 
         if (t >= 1.0f)
             sd.currentAnimationOpt.reset();
     }
 }
 
-void TextView::animateTo(const ImVec2 &fontSize, const double targetPos, const int idx) {
-    auto& scrollData = m_xyScrollData[idx];
+void TextView::animateTo(const ImVec2 &fontSize, const double targetPos, const Axis axis) {
+    auto& scrollData = m_xyScrollData[axis];
 
-    const double startPos = getCurrentPos(fontSize, idx);
+    const double startPos = getCurrentPos(fontSize, axis);
     const double clampedTarget = std::max(0.0, targetPos);
     if (std::abs(clampedTarget - startPos) < 0.5) {
         scrollData.currentAnimationOpt.reset();
-        setPos(fontSize, clampedTarget, idx);
+        setPos(fontSize, clampedTarget, axis);
         return;
     }
 
@@ -568,9 +584,9 @@ TextView::TextPos TextView::getPosFromMouse(
     const auto& region = textViewData.region;
     const auto& mousePos = ImGui::GetIO().MousePos;
 
-    TextPos res{m_xyScrollData[0].firstIdx, m_xyScrollData[1].firstIdx};
+    TextPos res{m_xyScrollData[kAxisX].firstIdx, m_xyScrollData[kAxisY].firstIdx};
 
-    const auto offset = (mousePos - region.Min + ImVec2(m_xyScrollData[0].pixelOffsetRemainder, m_xyScrollData[1].pixelOffsetRemainder)) / fontSize;
+    const auto offset = (mousePos - region.Min + ImVec2(m_xyScrollData[kAxisX].pixelOffsetRemainder, m_xyScrollData[kAxisY].pixelOffsetRemainder)) / fontSize;
     if (offset.x > 0.0f)
         res.col += static_cast<uint64_t>(std::round(offset.x)); // round to col
     if (offset.y > 0.0f)

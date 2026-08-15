@@ -57,10 +57,6 @@ private:
         bool shouldClose = false;
     } m_WindowData;
 
-    FrameCallback m_FrameCallback;
-    bool m_InFrame = false; // guards against a WM_TIMER / WM_SIZE frame
-    bool m_InResizeMoveLoop = false;
-
     struct D3D11Data {
         ID3D11Device* device = nullptr;
         ID3D11DeviceContext* context = nullptr;
@@ -69,6 +65,10 @@ private:
         bool swapChainOccluded = false;
         UINT resizeWidth = 0, resizeHeight = 0;
     } m_D3D11Data;
+
+    FrameCallback m_FrameCallback;
+    bool m_InFrame = false; // guards against a WM_TIMER / WM_SIZE frame
+    bool m_InResizeMoveLoop = false;
 
     std::filesystem::path m_WinDir;
     std::filesystem::path m_ExeDir;

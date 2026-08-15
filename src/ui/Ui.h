@@ -31,6 +31,19 @@ public:
 
     void showErrorMsg(std::string msg) { m_ErrorMsg = std::move(msg); }
 private:
+    void drawMainWindow();
+
+    struct Popups { bool genText = false; bool url = false; };
+    void drawMenuBar(Popups& outPopups) const;
+    void processShortcuts(Popups& outPopups) const;
+    void drawModals(const Popups& popups);
+    void drawUrlModal() const;
+    void drawGenTextModal() const;
+    void drawInfoModal();
+    void drawErrorModal();
+
+    void drawProgress();
+
     void execCommand(const Command& command) const;
 
     bool m_Win32Initialized = false;

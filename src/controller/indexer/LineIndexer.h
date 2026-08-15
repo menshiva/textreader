@@ -45,12 +45,11 @@ private:
     std::atomic<uint64_t> m_LinesNum = 0;
 
     // cache data useful for UI get() requests (e.g. when requesting neighbor lines one after another)
-    struct CacheData {
+    mutable struct CacheData {
         uint64_t lineIdx = UINT64_MAX;
         uint64_t lineStartOffsetBytes = 0;
         size_t anchorIdx = 0;
-    };
-    mutable CacheData m_CacheData;
+    } m_CacheData;
 
     static constexpr uint64_t kBytesPerAnchor = 128ull << 10; // caps how far get() has to rescan (trades index memory for lookup latency) - 128 kb
     static constexpr size_t kScanChunkBytes = 4ull << 20; // read buffer for the linear scan - 4 mb

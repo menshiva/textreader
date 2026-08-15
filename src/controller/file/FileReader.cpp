@@ -30,16 +30,29 @@ std::unique_ptr<FileReader> FileReader::open(const std::filesystem::path& path, 
     return std::unique_ptr<FileReader>(new FileReader(handle, static_cast<uint64_t>(sz.QuadPart), std::move(buffer), bufferSize));
 }
 
-std::span<const char> FileReader::next() {
-    if (m_Error)
-        return {};
+void FileReader::seek(const uint64_t offsetBytes) {
+    LARGE_INTEGER pos;
+    pos.QuadPart = static_cast<LONGLONG>(offsetBytes);
+    if (!SetFilePointerEx(m_Handle, pos, nullptr, FILE_BEGIN)) {
+        m_Error = true;
+        return;
+    }
+    m_CursorBytes = offsetBytes;
+}
 
+std::span<const char> FileReader::next() {
+    if (m_Error || m_CursorBytes >= m_SizeBytes)
+        return {}; // end of file
+
+    const auto toRead = static_cast<DWORD>(std::min<uint64_t>(m_BufferSize, m_SizeBytes - m_CursorBytes));
     DWORD read = 0;
-    if (!ReadFile(m_Handle, m_Buffer.get(), static_cast<DWORD>(m_BufferSize), &read, nullptr)) {
+    if (!ReadFile(m_Handle, m_Buffer.get(), toRead, &read, nullptr)) {
         m_Error = true;
         return {};
     }
-    return {m_Buffer.get(), read}; // read == 0 -> end of file
+
+    m_CursorBytes += read;
+    return {m_Buffer.get(), read};
 }
 
 FileReader::FileReader(

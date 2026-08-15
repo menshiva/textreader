@@ -16,6 +16,8 @@ public:
 
     static std::unique_ptr<FileReader> open(const std::filesystem::path& path, size_t bufferSize, std::string& outErrorMsg);
 
+    void seek(uint64_t offsetBytes);
+
     // returns the next chunk of the file
     // the pointer is valid until the next call
     std::span<const char> next();
@@ -31,5 +33,6 @@ private:
     const std::unique_ptr<char[]> m_Buffer;
     const size_t m_BufferSize;
 
+    uint64_t m_CursorBytes = 0;
     bool m_Error = false;
 };

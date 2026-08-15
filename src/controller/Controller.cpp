@@ -139,10 +139,10 @@ void Controller::openImpl(std::filesystem::path path) {
 void Controller::startOpenJob(OpenPayload&& payload) {
     assert(!m_OpenJob.isAlive());
 
+    payload.progressPtr = m_Ui.pushProgress("Indexing");
+
     m_OpenJob.start(
-        std::move(payload),
-        m_Ui.pushProgress("Indexing"),
-        &Controller::openJobRoutine,
+        std::move(payload), &Controller::openJobRoutine,
         [this] (std::optional<std::string> errorOpt, const bool wasCancelled) {
             onOpenJobFinished(std::move(errorOpt), wasCancelled);
         }
@@ -160,8 +160,8 @@ void Controller::startOpenJob(OpenPayload&& payload) {
     });
 }
 
-std::optional<std::string> Controller::openJobRoutine(const OpenPayload& d, const std::stop_token& st, std::atomic<float>& progress) {
-    return d.lineIndexerPtr->startScan(st, progress);
+std::optional<std::string> Controller::openJobRoutine(const OpenPayload& d, const std::stop_token& st) {
+    return d.lineIndexerPtr->startScan(st, d.progressPtr->getProgressTS());
 }
 
 // ReSharper disable once CppPassValueParameterByConstReference
@@ -169,6 +169,7 @@ void Controller::onOpenJobFinished(std::optional<std::string> errorOpt, const bo
     if (!m_OpenJob.isAlive())
         return;
     m_OpenJob.releaseTask();
+    m_OpenJob.data().progressPtr.reset();
 
     if (wasCancelled) {
         closeImpl();
@@ -210,21 +211,20 @@ void Controller::downloadImpl(std::string url) {
     DownloadPayload payload;
     payload.url = std::move(url);
     payload.targetPath = tmpFilePath;
-    payload.writer = std::move(writer);
-    payload.responseInfo = std::make_unique<http::ResponseInfo>();
+    payload.writerPtr = std::move(writer);
+    payload.responseInfo = http::ResponseInfo();
+    payload.progressPtr = m_Ui.pushProgress("Downloading", [this] { cancelJob(m_DownloadJob); });
 
     m_DownloadJob.start(
-        std::move(payload),
-        m_Ui.pushProgress("Downloading", [this] { m_DownloadJob.cancel(); }),
-        &Controller::downloadJobRoutine,
+        std::move(payload), &Controller::downloadJobRoutine,
         [this] (std::optional<std::string> errorOpt, const bool wasCancelled) {
             onDownloadJobFinished(std::move(errorOpt), wasCancelled);
         }
     );
 }
 
-std::optional<std::string> Controller::downloadJobRoutine(const DownloadPayload& d, const std::stop_token& st, std::atomic<float>& progress) {
-    return http::download(*d.writer, st, progress, *d.responseInfo, d.url, d.targetPath);
+std::optional<std::string> Controller::downloadJobRoutine(DownloadPayload& d, const std::stop_token& st) {
+    return http::download(*d.writerPtr, st, d.progressPtr->getProgressTS(), d.responseInfo, d.url, d.targetPath);
 }
 
 // ReSharper disable once CppPassValueParameterByConstReference
@@ -291,18 +291,19 @@ void Controller::genImpl(const uint64_t targetBytes, const uint64_t targetLines)
         return;
     }
 
+    GenPayload payload{targetBytes, targetLines, std::move(writer)};
+    payload.progressPtr = m_Ui.pushProgress("Generating", [this] { cancelJob(m_GenJob); });
+
     m_GenJob.start(
-        GenPayload{targetBytes, targetLines, std::move(writer)},
-        m_Ui.pushProgress("Generating", [this] { m_GenJob.cancel(); }),
-        &Controller::genJobRoutine,
+        std::move(payload), &Controller::genJobRoutine,
         [this] (std::optional<std::string> errorOpt, const bool wasCancelled) {
             onGenJobFinished(std::move(errorOpt), wasCancelled);
         }
     );
 }
 
-std::optional<std::string> Controller::genJobRoutine(const GenPayload& d, const std::stop_token& st, std::atomic<float>& progress) {
-    return textgen::generate(*d.writer, st, progress, d.targetBytes, d.targetLines);
+std::optional<std::string> Controller::genJobRoutine(const GenPayload& d, const std::stop_token& st) {
+    return textgen::generate(*d.writerPtr, st, d.progressPtr->getProgressTS(), d.targetBytes, d.targetLines);
 }
 
 // ReSharper disable once CppPassValueParameterByConstReference
@@ -351,10 +352,11 @@ void Controller::saveImpl(std::filesystem::path targetPath) {
         return;
     }
 
+    SavePayload payload{m_OpenJob.data().path, std::move(targetPath), existedBefore};
+    payload.progressPtr = m_Ui.pushProgress("Saving", [this] { cancelJob(m_SaveJob); });
+
     m_SaveJob.start(
-        SavePayload{m_OpenJob.data().path, std::move(targetPath), existedBefore},
-        m_Ui.pushProgress("Saving", [this] { m_SaveJob.cancel(); }),
-        &Controller::saveJobRoutine,
+        std::move(payload), &Controller::saveJobRoutine,
         [this] (std::optional<std::string> errorOpt, const bool wasCancelled) {
             onSaveJobFinished(std::move(errorOpt), wasCancelled);
         }
@@ -385,9 +387,9 @@ namespace {
     }
 }
 
-std::optional<std::string> Controller::saveJobRoutine(const SavePayload& d, const std::stop_token& st, std::atomic<float>& progress) {
+std::optional<std::string> Controller::saveJobRoutine(const SavePayload& d, const std::stop_token& st) {
     BOOL cancelFlag = FALSE;
-    CopyProgressData data{&progress, &st, &cancelFlag};
+    CopyProgressData data{&d.progressPtr->getProgressTS(), &st, &cancelFlag};
     if (CopyFileExW(
         d.sourcePath.c_str(), d.targetPath.c_str(), &copyProgressRoutine,
         &data, &cancelFlag, 0 // overwrite allowed: the save dialog already asked
@@ -433,7 +435,7 @@ void Controller::closeImpl(std::function<void()> deferredFunc) {
 
     if (m_OpenJob.isRunning()) {
         // still indexing
-        m_OpenJob.cancel(std::move(deferredFunc));
+        cancelJob(m_OpenJob, std::move(deferredFunc));
         return;
     }
 

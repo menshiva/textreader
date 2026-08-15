@@ -42,56 +42,67 @@ private:
     Ui& m_Ui;
 
     template <typename Payload>
+    static void cancelJob(Job<Payload>& job, std::function<void()> deferred = nullptr) {
+        if (job.isAlive() && job.data().progressPtr)
+            job.data().progressPtr->setCancelled();
+        job.cancel(std::move(deferred));
+    }
+
+    template <typename Payload>
     void confirmJobCancelThen(std::string question, Job<Payload>& job, std::function<void()> then) {
         m_Ui.showInfoMsg({std::move(question), [&job, t = std::move(then)] (const bool ok) mutable {
             if (ok)
-                job.cancel(std::move(t));
+                cancelJob(job, std::move(t));
         }});
     }
 
     struct OpenPayload {
         std::filesystem::path path;
         std::unique_ptr<LineIndexer> lineIndexerPtr;
+        std::unique_ptr<Ui::ProgressRAII> progressPtr;
     };
     Job<OpenPayload> m_OpenJob;
 
     void openImpl(std::filesystem::path path);
     void startOpenJob(OpenPayload&& payload);
-    static std::optional<std::string> openJobRoutine(const OpenPayload& d, const std::stop_token& st, std::atomic<float>& progress);
+    static std::optional<std::string> openJobRoutine(const OpenPayload& d, const std::stop_token& st);
     void onOpenJobFinished(std::optional<std::string> errorOpt, bool wasCancelled);
 
     struct DownloadPayload {
         std::string url;
         std::filesystem::path targetPath;
-        std::unique_ptr<FileWriter> writer;
-        std::unique_ptr<http::ResponseInfo> responseInfo;
+        std::unique_ptr<FileWriter> writerPtr;
+        http::ResponseInfo responseInfo;
+        std::unique_ptr<Ui::ProgressRAII> progressPtr;
     };
     Job<DownloadPayload> m_DownloadJob;
 
     void downloadImpl(std::string url);
-    static std::optional<std::string> downloadJobRoutine(const DownloadPayload& d, const std::stop_token& st, std::atomic<float>& progress);
+    static std::optional<std::string> downloadJobRoutine(DownloadPayload& d, const std::stop_token& st);
     void onDownloadJobFinished(std::optional<std::string> errorOpt, bool wasCancelled);
 
     struct GenPayload {
         uint64_t targetBytes = 0;
         uint64_t targetLines = 0;
-        std::unique_ptr<FileWriter> writer;
+        std::unique_ptr<FileWriter> writerPtr;
+        std::unique_ptr<Ui::ProgressRAII> progressPtr;
     };
     Job<GenPayload> m_GenJob;
 
     void genImpl(uint64_t targetBytes, uint64_t targetLines);
-    static std::optional<std::string> genJobRoutine(const GenPayload& d, const std::stop_token& st, std::atomic<float>& progress);
+    static std::optional<std::string> genJobRoutine(const GenPayload& d, const std::stop_token& st);
     void onGenJobFinished(std::optional<std::string> errorOpt, bool wasCancelled);
 
     struct SavePayload {
         std::filesystem::path sourcePath;
         std::filesystem::path targetPath;
         bool existedBefore = false;
+        std::unique_ptr<Ui::ProgressRAII> progressPtr;
     };
     Job<SavePayload> m_SaveJob;
 
     void saveImpl(std::filesystem::path targetPath);
-    static std::optional<std::string> saveJobRoutine(const SavePayload& d, const std::stop_token& st, std::atomic<float>& progress);
+    static std::optional<std::string> saveJobRoutine(const SavePayload& d, const std::stop_token& st);
     void onSaveJobFinished(std::optional<std::string> errorOpt, bool wasCancelled);
 
     void closeImpl(std::function<void()> deferredFunc = nullptr);

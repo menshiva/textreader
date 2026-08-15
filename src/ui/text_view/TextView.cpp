@@ -1,7 +1,9 @@
 ﻿#include "TextView.h"
 #include <algorithm>
 #include <charconv>
-#include "imgui_internal.h"
+#include "../Ui.h"
+
+TextView::TextView(Ui& parentUi) : m_ParentUi(parentUi) {}
 
 void TextView::reset(Source source) {
     m_Source = std::move(source);
@@ -12,6 +14,9 @@ void TextView::reset(Source source) {
         m_xyScrollData[i].currentAnimationOpt.reset();
     }
     m_MaxVisibleLineLength = 0;
+
+    m_CurrentSelectionOpt.reset();
+    m_Selecting = false;
 }
 
 void TextView::draw() {
@@ -118,6 +123,11 @@ void TextView::draw() {
     m_MaxVisibleLineLength = 0;
     if (const auto tvDataPtr = layoutData.textViewDataOpt.has_value() ? &*layoutData.textViewDataOpt : nullptr) {
         const auto& textViewRegion = tvDataPtr->region;
+
+        TextPos selectionFrom, selectionTo;
+        const bool hasSelection = getSelectionRange(selectionFrom, selectionTo);
+        const auto selectionColor = ImGui::GetColorU32(ImGuiCol_TextSelectedBg);
+
         dl->PushClipRect(textViewRegion.Min,textViewRegion.Max, true);
         for (uint64_t i = 0; i < layoutData.xyMetrics[1].reservedNum + 1; ++i) {
             const uint64_t lineNo = m_xyScrollData[1].firstIdx + i;
@@ -133,7 +143,22 @@ void TextView::draw() {
             if (s.empty())
                 continue;
 
-            dl->AddText(ImVec2(textViewRegion.Min.x - m_xyScrollData[0].pixelOffsetRemainder, y), textColor, s.data(), s.data() + s.size());
+            const float lineStartX = textViewRegion.Min.x - m_xyScrollData[0].pixelOffsetRemainder;
+
+            // selection
+            if (hasSelection && lineNo >= selectionFrom.line && lineNo <= selectionTo.line) {
+                const uint64_t fromCol = lineNo == selectionFrom.line ? selectionFrom.col : 0;
+                const uint64_t toCol = std::min<uint64_t>(lineNo == selectionTo.line ? selectionTo.col : totalLineLength, totalLineLength);
+                if (fromCol < toCol) {
+                    dl->AddRectFilled(
+                        ImVec2(lineStartX + fontSize.x * (static_cast<float>(fromCol) - static_cast<float>(m_xyScrollData[0].firstIdx)), y),
+                        ImVec2(lineStartX + fontSize.x * (static_cast<float>(toCol) - static_cast<float>(m_xyScrollData[0].firstIdx)), y + fontSize.y),
+                        selectionColor
+                    );
+                }
+            }
+
+            dl->AddText(ImVec2(lineStartX, y), textColor, s.data(), s.data() + s.size());
         }
         dl->PopClipRect();
     }
@@ -398,6 +423,41 @@ void TextView::handleInput(const LayoutData& layoutData, const ImVec2& fontSize,
 
     const auto& io = ImGui::GetIO();
 
+    // selection
+    if (const auto textViewDataPtr = layoutData.textViewDataOpt.has_value() ? &*layoutData.textViewDataOpt : nullptr) {
+        const auto& region = textViewDataPtr->region;
+
+        if (ImGui::IsWindowHovered() && region.Contains(io.MousePos))
+            ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput);
+
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsWindowHovered() && region.Contains(io.MousePos)) {
+            const auto pos = getPosFromMouse(*textViewDataPtr, fontSize, sourceMaxLinesNum);
+            m_CurrentSelectionOpt = Selection{pos, pos};
+            m_Selecting = true;
+        }
+
+        if (m_Selecting) {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                // handle autoscroll when selecting outside the region bounds (the further out the mouse is, the faster it goes)
+                {
+                    ImVec2 autoScroll(0.0f, 0.0f);
+                    if (io.MousePos.y < region.Min.y) autoScroll.y = (io.MousePos.y - region.Min.y) / fontSize.y;
+                    else if (io.MousePos.y > region.Max.y) autoScroll.y = (io.MousePos.y - region.Max.y) / fontSize.y;
+                    if (io.MousePos.x < region.Min.x) autoScroll.x = (io.MousePos.x - region.Min.x) / fontSize.x;
+                    else if (io.MousePos.x > region.Max.x) autoScroll.x = (io.MousePos.x - region.Max.x) / fontSize.x;
+                    for (int i = 0; i < 2; ++i)
+                        if (autoScroll[i] != 0.0f)
+                            scrollByPixels(fontSize, autoScroll * kSelectionAutoScrollSpeedModifier, i);
+                }
+                if (m_CurrentSelectionOpt.has_value())
+                    m_CurrentSelectionOpt->stop = getPosFromMouse(*textViewDataPtr, fontSize, sourceMaxLinesNum);
+            }
+            else {
+                m_Selecting = false;
+            }
+        }
+    }
+
     // mouse wheel
     if (ImGui::IsWindowHovered()) {
         ImVec2 delta(0.0f, 0.0f);
@@ -418,6 +478,13 @@ void TextView::handleInput(const LayoutData& layoutData, const ImVec2& fontSize,
 
     // keyboard
     if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && !ImGui::IsAnyItemActive()) {
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false) && sourceMaxLinesNum) {
+            m_CurrentSelectionOpt = Selection{TextPos{0, 0}, TextPos{UINT64_MAX, sourceMaxLinesNum - 1}};
+            m_Selecting = false;
+        }
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false))
+            copySelection();
+
         if (ImGui::IsKeyPressed(ImGuiKey_Home, false)) {
             if (!io.KeyCtrl)
                 animateTo(fontSize, 0.0, 0); // move to x=0
@@ -493,4 +560,71 @@ void TextView::animateTo(const ImVec2 &fontSize, const double targetPos, const i
     anim.startPos = startPos;
     anim.targetPos = clampedTarget;
     anim.elapsed = 0.0f;
+}
+
+TextView::TextPos TextView::getPosFromMouse(
+    const LayoutData::TextViewData& textViewData, const ImVec2& fontSize, const uint64_t sourceMaxLinesNum
+) const {
+    const auto& region = textViewData.region;
+    const auto& mousePos = ImGui::GetIO().MousePos;
+
+    TextPos res{m_xyScrollData[0].firstIdx, m_xyScrollData[1].firstIdx};
+
+    const auto offset = (mousePos - region.Min + ImVec2(m_xyScrollData[0].pixelOffsetRemainder, m_xyScrollData[1].pixelOffsetRemainder)) / fontSize;
+    if (offset.x > 0.0f)
+        res.col += static_cast<uint64_t>(std::round(offset.x)); // round to col
+    if (offset.y > 0.0f)
+        res.line += static_cast<uint64_t>(offset.y); // truncate to line
+
+    if (sourceMaxLinesNum && res.line >= sourceMaxLinesNum)
+        res.line = sourceMaxLinesNum - 1;
+
+    return res;
+}
+
+bool TextView::getSelectionRange(TextPos& outFrom, TextPos& outTo) const {
+    if (!m_CurrentSelectionOpt.has_value())
+        return false;
+
+    outFrom = m_CurrentSelectionOpt->start;
+    outTo = m_CurrentSelectionOpt->stop;
+
+    if (outFrom.line > outTo.line || (outFrom.line == outTo.line && outFrom.col > outTo.col))
+        std::swap(outFrom, outTo);
+
+    return outFrom.line != outTo.line || outFrom.col != outTo.col;
+}
+
+void TextView::copySelection() const {
+    static constexpr size_t kMaxCopyBytes = kMaxCopyMb << 20;
+
+    TextPos from, to;
+    if (!getSelectionRange(from, to))
+        return;
+
+    std::string text;
+    for (uint64_t line = from.line; line <= to.line; ++line) {
+        const uint64_t fromCol = line == from.line ? from.col : 0;
+        const uint64_t colsNum = line == to.line ? to.col - fromCol : UINT64_MAX;
+        uint64_t tmp;
+        const auto s = m_Source.getLine(line, fromCol, colsNum, tmp);
+
+        if (line != from.line)
+            text += "\r\n";
+        text.append(s);
+
+        if (text.size() >= kMaxCopyBytes)
+            break;
+    }
+    if (text.empty())
+        return;
+
+    ImGui::SetClipboardText(text.c_str());
+
+    if (text.size() >= kMaxCopyBytes) {
+        m_ParentUi.showInfoMsg({
+            "The selection is too large to copy.\nCopied the first ~" + std::to_string(kMaxCopyMb) + " Mb.",
+            nullptr
+        });
+    }
 }

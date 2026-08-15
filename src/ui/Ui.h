@@ -26,10 +26,7 @@ public:
     void setFileOpened(TextView::Source source);
     void setFileClosed();
 
-    struct InfoMsgData {
-        std::string infoMsg;
-        std::function<void(bool)> callback;
-    };
+    struct InfoMsgData { std::string infoMsg; std::function<void(bool)> callback;};
     void showInfoMsg(InfoMsgData msg) { m_InfoMsgData = std::move(msg); }
 
     void showErrorMsg(std::string msg) { m_ErrorMsg = std::move(msg); }

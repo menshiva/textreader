@@ -5,9 +5,11 @@
 #include <string_view>
 #include "imgui_internal.h"
 
+class Ui;
+
 class TextView {
 public:
-    TextView() = default;
+    explicit TextView(Ui& parentUi);
     ~TextView() = default;
 
     TextView(const TextView&) = delete;
@@ -82,9 +84,21 @@ private:
     void updateAnimation(const ImVec2& fontSize);
     void animateTo(const ImVec2& fontSize, double targetPos, int idx);
 
+    struct TextPos { uint64_t col = 0; uint64_t line = 0; };
+    TextPos getPosFromMouse(const LayoutData::TextViewData& textViewData, const ImVec2& fontSize, uint64_t sourceMaxLinesNum) const;
+    bool getSelectionRange(TextPos& outFrom, TextPos& outTo) const;
+    void copySelection() const;
+
+    Ui& m_ParentUi;
+
     Source m_Source;
     ScrollData m_xyScrollData[2];
     uint64_t m_MaxVisibleLineLength = 0;
+
+    // start could be > than stop!!!
+    struct Selection { TextPos start; TextPos stop; };
+    std::optional<Selection> m_CurrentSelectionOpt;
+    bool m_Selecting = false;
 
     static constexpr float kGutterTextHorizontalPadding = 4.0f;
     static constexpr uint64_t kGutterMinDigitsNum = 3;
@@ -98,4 +112,8 @@ private:
     static constexpr float kScrollbarMinGrabSize = 24.0f;
 
     static constexpr float kScrollAnimDuration = 0.1f; // 100 ms
+
+    static constexpr float kSelectionAutoScrollSpeedModifier = 0.20f;
+
+    static constexpr size_t kMaxCopyMb = 16;
 };

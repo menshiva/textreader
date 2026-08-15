@@ -96,8 +96,8 @@ std::optional<std::string> LineIndexer::startScan(const std::stop_token& st, std
     if (chunk.size() >= 3
             && static_cast<unsigned char>(chunk[0]) == 0xEF
             && static_cast<unsigned char>(chunk[1]) == 0xBB
-            && static_cast<unsigned char>(chunk[2]) == 0xBF)
-    {
+            && static_cast<unsigned char>(chunk[2]) == 0xBF
+    ) {
         contentStartOffsetBytes = 3;
     }
     if (contentStartOffsetBytes >= fileSizeBytes)

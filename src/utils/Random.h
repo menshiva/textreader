@@ -3,6 +3,7 @@
 #include <random>
 
 namespace utils {
+    // https://stackoverflow.com/questions/53886131/how-does-xorshift32-works
     struct XorShift32 {
         uint32_t s;
 

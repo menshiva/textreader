@@ -3,7 +3,7 @@
 #include "imgui_impl_win32.h"
 #include "../app/Win32App.h"
 
-Ui::Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt) {
+Ui::Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt) : m_TextView(*this) {
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -247,11 +247,10 @@ void Ui::build() {
                         data.callback(true);
                 }
 
-                if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f))) {
+                if (m_InfoMsgData.callback && ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f))) {
                     const auto data = std::move(m_InfoMsgData);
                     ImGui::CloseCurrentPopup();
-                    if (data.callback)
-                        data.callback(false);
+                    data.callback(false);
                 }
 
                 ImGui::SetItemDefaultFocus();

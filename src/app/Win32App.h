@@ -21,10 +21,6 @@ public:
     void present(bool vsync);
     void queueResize(UINT w, UINT h);
 
-    // While the user drags the border or the caption, Windows runs its own message loop inside
-    // DefWindowProc and DispatchMessage does not return until the drag ends - so the main loop
-    // stops and the content freezes. Handing the frame over as a callback lets the window
-    // procedure keep drawing from inside that loop.
     using FrameCallback = std::function<void()>;
     void setFrameCallback(FrameCallback callback) { m_FrameCallback = std::move(callback); }
     void runFrame();

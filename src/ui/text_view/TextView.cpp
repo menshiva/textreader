@@ -370,8 +370,13 @@ void TextView::drawText(const LayoutData& layoutData, const ImVec2& fontSize) {
 
         // draw search matches
         if (!m_SearchNeedle.empty()) {
+            // matches come out in order -> each column is counted from the previous match
+            size_t countedBytes = 0;
+            uint64_t countedCols = 0;
             for (size_t pos = 0; (pos = lineText.find(m_SearchNeedle, pos)) != std::string_view::npos; ++pos) {
-                const uint64_t startCol = fetchFromCol + utf8::countCodepoints(lineText.data(), lineText.data() + pos);
+                countedCols += utf8::countCodepoints(lineText.data() + countedBytes, lineText.data() + pos);
+                countedBytes = pos;
+                const uint64_t startCol = fetchFromCol + countedCols;
                 dl->AddRectFilled(
                     ImVec2(columnX(startCol), y), ImVec2(columnX(startCol + m_SearchNeedleCols), y + fontSize.y),
                     m_CurrentSearchMatchOpt.has_value() && m_CurrentSearchMatchOpt->line == lineIdx && m_CurrentSearchMatchOpt->col == startCol

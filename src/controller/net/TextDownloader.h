@@ -15,5 +15,5 @@ namespace http {
         const std::string& url, const std::filesystem::path& targetPath
     );
 
-    constexpr size_t kWriteBufferSize = 1ull << 20; // 1 mb
+    constexpr size_t kWriteBufferSize = 4ull << 20; // 4 mb
 }

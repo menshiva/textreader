@@ -4,6 +4,13 @@
 #include "../../utils/FileUtils.h"
 #include "../file/FileWriter.h"
 
+namespace {
+    constexpr int kResolveTimeoutMs = 10000;
+    constexpr int kConnectTimeoutMs = 10000;
+    constexpr int kSendTimeoutMs = 30000;
+    constexpr int kReceiveTimeoutMs = 30000;
+}
+
 std::optional<std::string> http::download(
     FileWriter& writer, const std::stop_token& st, std::atomic<float>& outProgress, ResponseInfo& outInfo,
     const std::string& url, const std::filesystem::path& targetPath
@@ -57,6 +64,10 @@ std::optional<std::string> http::download(
     if (!sessionHandle.handle)
         return "Cannot initialize WinHTTP";
 
+    // without this, the default resolve timeout is "wait forever"
+    // https://learn.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpsettimeouts
+    WinHttpSetTimeouts(sessionHandle.handle, kResolveTimeoutMs, kConnectTimeoutMs, kSendTimeoutMs, kReceiveTimeoutMs);
+
     const InternetHandle connectionHandle(WinHttpConnect(sessionHandle.handle, crackedUrl.host.c_str(), crackedUrl.port, 0));
     if (!connectionHandle.handle)
         return "Cannot connect to the server";
@@ -69,12 +80,17 @@ std::optional<std::string> http::download(
     if (!requestHandle.handle)
         return "Cannot create the request";
 
+    if (st.stop_requested())
+        return std::nullopt;
     if (!WinHttpSendRequest(
         requestHandle.handle, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA,
         0, 0, 0
     )) {
         return "Cannot reach the server";
     }
+    if (st.stop_requested())
+        return std::nullopt;
+
     if (!WinHttpReceiveResponse(requestHandle.handle, nullptr))
         return "No response from the server";
 

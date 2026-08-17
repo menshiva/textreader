@@ -26,6 +26,6 @@ namespace search {
     );
 
     constexpr size_t kReadBufferSize = 4ull << 20; // 4 mb
-    constexpr uint64_t kBackwardWindowBytes = 64ull << 20; // 64 mb
+    constexpr uint64_t kBackwardWindowBytes = 4ull << 20; // 4 mb
     constexpr size_t kMaxNeedleBytes = 1024;
 }

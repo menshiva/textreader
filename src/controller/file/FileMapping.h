@@ -35,5 +35,5 @@ private:
     uint64_t m_CurrentViewOffsetBytes = 0;
 
     // caps the working set regardless of file size
-    static constexpr uint64_t kMinWindowSizeBytes = 16ull << 20; // 16 mb
+    static constexpr uint64_t kMinWindowSizeBytes = 4ull << 20; // 4 mb
 };

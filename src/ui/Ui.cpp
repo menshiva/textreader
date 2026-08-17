@@ -1,6 +1,7 @@
 ﻿#include "Ui.h"
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
+#include "imgui_internal.h"
 #include "../app/Win32App.h"
 
 Ui::Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt) : m_TextView(*this) {
@@ -9,7 +10,7 @@ Ui::Ui(const Win32App& app, std::optional<std::string>& outErrorMsgOpt) : m_Text
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
-    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad; // Enable Gamepad Controls
+    io.IniFilename = nullptr; // no imgui.ini next to the exe - there is no window layout worth remembering
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
@@ -73,9 +74,10 @@ void Ui::render() {
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 }
 
-void Ui::setFileOpened(TextView::Source source) {
-    m_TextView.reset(std::move(source));
+void Ui::setFileOpened(const TextView::Source* sourcePtr) {
+    m_TextView.reset(sourcePtr);
     m_FileOpen = true;
+    setSearchIdle();
     if (m_SearchData.panelOpen)
         m_TextView.setSearchNeedle(m_SearchData.needleBuf);
 }
@@ -177,6 +179,7 @@ void Ui::processShortcuts(Popups& outPopups) {
     }
 
     if (m_FileOpen) {
+        // using IsKeyPressed() because it reads the key directly, ignoring focus
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false))
             openSearchPanel();
         if (m_SearchData.panelOpen) {
@@ -196,14 +199,14 @@ void Ui::drawModals(const Popups& popups) {
         ImGui::OpenPopup("Generate txt");
     if (popups.url)
         ImGui::OpenPopup("Open from URL");
-    if (!m_InfoMsgData.infoMsg.empty() && !ImGui::IsPopupOpen("##info"))
-        ImGui::OpenPopup("##info");
+    if (!m_MessageData.text.empty() && !ImGui::IsPopupOpen("##message"))
+        ImGui::OpenPopup("##message");
     if (!m_ErrorMsg.empty() && !ImGui::IsPopupOpen("Error"))
         ImGui::OpenPopup("Error");
 
     drawUrlModal();
     drawGenTextModal();
-    drawInfoModal();
+    drawMessageModal();
     drawErrorModal();
 }
 
@@ -230,7 +233,10 @@ void Ui::drawUrlModal() {
         ImGui::SetKeyboardFocusHere();
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * kUrlFieldWidthEm);
 
-    const bool enter = ImGui::InputTextWithHint("##url", "URL", m_UrlBuf, IM_COUNTOF(m_UrlBuf), ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool enter = ImGui::InputTextWithHint(
+        "##url", "URL", m_UrlBuf, IM_COUNTOF(m_UrlBuf),
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll
+    );
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -263,11 +269,11 @@ void Ui::drawGenTextModal() {
 
     ImGui::SameLine();
 
-    if (ImGui::BeginCombo("##GenTxtCombo", kGenTextUnits[m_GenTextData.unitIdx], ImGuiComboFlags_WidthFitPreview)) {
-        for (int n = 0; n < IM_COUNTOF(kGenTextUnits); ++n) {
-            const bool isSelected = m_GenTextData.unitIdx == n;
-            if (ImGui::Selectable(kGenTextUnits[n], isSelected))
-                m_GenTextData.unitIdx = n;
+    if (ImGui::BeginCombo("##GenTxtCombo", cmd::GenRandom::kTypeNames[m_GenTextData.typeIdx], ImGuiComboFlags_WidthFitPreview)) {
+        for (int n = 0; n < cmd::GenRandom::kTypeCount; ++n) {
+            const bool isSelected = m_GenTextData.typeIdx == n;
+            if (ImGui::Selectable(cmd::GenRandom::kTypeNames[n], isSelected))
+                m_GenTextData.typeIdx = n;
             if (isSelected)
                 ImGui::SetItemDefaultFocus();
         }
@@ -282,7 +288,7 @@ void Ui::drawGenTextModal() {
     if (genButtonDisabled)
         ImGui::BeginDisabled();
     if (ImGui::Button("Generate", ImVec2(-FLT_MIN, 0.0f))) {
-        execCommand(cmd::GenRandom(static_cast<uint32_t>(m_GenTextData.value), static_cast<cmd::GenRandom::Type>(m_GenTextData.unitIdx)));
+        execCommand(cmd::GenRandom(static_cast<uint32_t>(m_GenTextData.value), static_cast<cmd::GenRandom::Type>(m_GenTextData.typeIdx)));
         ImGui::CloseCurrentPopup();
     }
     if (genButtonDisabled)
@@ -294,11 +300,11 @@ void Ui::drawGenTextModal() {
     ImGui::EndPopup();
 }
 
-void Ui::drawInfoModal() {
-    if (!beginCenteredModal("##info"))
+void Ui::drawMessageModal() {
+    if (!beginCenteredModal("##message"))
         return;
 
-    ImGui::TextUnformatted(m_InfoMsgData.infoMsg.c_str(), m_InfoMsgData.infoMsg.c_str() + m_InfoMsgData.infoMsg.size());
+    ImGui::TextUnformatted(m_MessageData.text.c_str(), m_MessageData.text.c_str() + m_MessageData.text.size());
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -310,22 +316,22 @@ void Ui::drawInfoModal() {
     std::optional<bool> answerOpt;
     if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f)))
         answerOpt = true;
-    if (m_InfoMsgData.callback && ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)))
+    if (m_MessageData.confirmCallback && ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)))
         answerOpt = false;
 
     ImGui::SetItemDefaultFocus();
 
-    InfoMsgData answered;
+    MessageData answered;
     if (answerOpt.has_value()) {
-        answered = std::move(m_InfoMsgData);
-        m_InfoMsgData = {};
+        answered = std::move(m_MessageData);
+        m_MessageData = {};
         ImGui::CloseCurrentPopup();
     }
 
     ImGui::EndPopup();
 
-    if (answered.callback)
-        answered.callback(*answerOpt);
+    if (answered.confirmCallback)
+        answered.confirmCallback(*answerOpt);
 }
 
 void Ui::drawErrorModal() {

@@ -18,16 +18,16 @@ public:
     Job(Job&&) noexcept = delete;
     Job& operator=(Job&&) noexcept = delete;
 
-    bool isAlive() const { return m_Alive; }
+    bool hasData() const { return m_HasData; }
     bool isRunning() const { return !!m_TaskPtr; }
 
-    const Payload& data() const { assert(m_Alive); return m_Payload; }
-    Payload& data() { assert(m_Alive); return m_Payload; }
+    const Payload& data() const { assert(m_HasData); return m_Payload; }
+    Payload& data() { assert(m_HasData); return m_Payload; }
 
     void start(Payload&& payload, Routine routine, OnDone onDone) {
-        assert(!m_Alive && !m_TaskPtr);
+        assert(!m_HasData && !m_TaskPtr);
         m_Payload = std::move(payload);
-        m_Alive = true;
+        m_HasData = true;
 
         m_TaskPtr = std::make_unique<AsyncTask>([this, r = std::move(routine)] (const std::stop_token& st) {
             return r(m_Payload, st);
@@ -35,22 +35,15 @@ public:
     }
 
     void checkFinished() {
-        if (!m_TaskPtr || !m_TaskPtr->producedResults())
+        if (!m_TaskPtr || !m_TaskPtr->isFinished())
             return;
-
-        // a completion callback is free to call releaseTask()/clear()/start() on this job,
-        // so hand the task over to a local first - it must not die inside its own call
-        const auto keepAlive = std::move(m_TaskPtr);
-        keepAlive->join();
+        const auto taskPtr = std::move(m_TaskPtr);
+        taskPtr->complete();
     }
 
-    void cancel(std::function<void()> deferred = nullptr) const {
-        if (m_TaskPtr) {
-            m_TaskPtr->requestCancel(std::move(deferred));
-            return;
-        }
-        if (deferred)
-            deferred();
+    void cancel() const {
+        if (m_TaskPtr)
+            m_TaskPtr->requestCancel();
     }
 
     void releaseTask() { m_TaskPtr.reset(); }
@@ -58,10 +51,10 @@ public:
     void clear() {
         releaseTask();
         m_Payload = Payload{};
-        m_Alive = false;
+        m_HasData = false;
     }
 private:
-    bool m_Alive = false;
+    bool m_HasData = false;
     Payload m_Payload;
     std::unique_ptr<AsyncTask> m_TaskPtr;
 };

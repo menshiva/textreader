@@ -6,18 +6,18 @@ std::optional<std::string> textgen::generate(
     FileWriter& writer, const std::stop_token& st, std::atomic<float>& outProgress,
     const uint64_t targetBytes, const uint64_t targetLines
 ) {
-    constexpr static char kAlphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .";
-    constexpr static uint32_t alphabetLen = sizeof(kAlphabet) - 1;
+    static constexpr char kAlphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .";
+    static constexpr uint32_t kAlphabetLen = sizeof(kAlphabet) - 1;
 
-    constexpr static uint32_t kMaxLineLen = 1024;
-    constexpr static size_t kPoolSize = 64ull << 10; // pre-made random characters - 64 kb
+    static constexpr uint32_t kMaxLineLen = 1024;
+    static constexpr size_t kPoolSize = 64ull << 10; // pre-made random characters - 64 kb
 
     utils::XorShift32 rnd;
 
     // generate random chars
     std::vector<char> pool(kPoolSize);
     for (size_t i = 0; i < kPoolSize; ++i)
-        pool[i] = kAlphabet[rnd.next() % alphabetLen];
+        pool[i] = kAlphabet[rnd.next() % kAlphabetLen];
 
     const auto begin = writer.getBuffer();
     const auto end = begin + writer.getBufferSize();

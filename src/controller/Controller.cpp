@@ -1,4 +1,4 @@
-﻿#include "Controller.h"
+#include "Controller.h"
 #include "../utils/FileUtils.h"
 #include "file/FileReader.h"
 #include "file/FileWriter.h"
@@ -12,7 +12,7 @@ Controller::Controller(Win32App &app, Ui& ui) : m_App(app), m_Ui(ui) {
 Controller::~Controller() {
     m_Ui.setCommandHandler(nullptr);
     m_Ui.setFileClosed();
-    m_Ui.showInfoMsg({});
+    m_Ui.showMessage({});
     m_Ui.showErrorMsg({});
 }
 
@@ -22,6 +22,30 @@ void Controller::tick() {
     m_GenJob.checkFinished();
     m_SaveJob.checkFinished();
     m_SearchJob.checkFinished();
+
+    runPendingAction();
+}
+
+void Controller::setPendingAction(std::function<bool()> isReady, std::function<void()> run) {
+    m_PendingActionOpt.emplace(PendingAction{std::move(isReady), std::move(run)});
+}
+
+void Controller::runPendingAction() {
+    if (!m_PendingActionOpt.has_value() || !m_PendingActionOpt->isReady())
+        return;
+    const auto action = std::move(*m_PendingActionOpt);
+    m_PendingActionOpt.reset();
+    action.run();
+}
+
+std::string_view Controller::TextSource::getLine(
+    const uint64_t lineIdx, const uint64_t fromCol, const uint64_t colsNum, uint64_t& outLineTotalLength
+) const {
+    return controller.getTextDataImpl(lineIdx, fromCol, colsNum, outLineTotalLength);
+}
+
+void Controller::TextSource::getTextSize(uint64_t& maxColsNum, uint64_t& rowsNum) const {
+    controller.getTextDataSizeImpl(maxColsNum, rowsNum);
 }
 
 void Controller::process(const Command& command) {
@@ -58,7 +82,7 @@ void Controller::CommandVisitor::operator()(const cmd::GenRandom& cmd) const {
 }
 
 void Controller::CommandVisitor::operator()(const cmd::SaveAs&) const {
-    if (controller.m_OpenJob.isAlive()) {
+    if (controller.m_OpenJob.hasData()) {
         // ReSharper disable once CppLocalVariableMayBeConst
         if (auto targetFilePathOpt = controller.m_App.showTextFileDialog(false))
             controller.saveImpl(std::move(*targetFilePathOpt));
@@ -81,14 +105,14 @@ std::string_view Controller::getTextDataImpl(
     const uint64_t lineIdx, const uint64_t fromCol, const uint64_t colsNum,
     uint64_t& outLineTotalLength
 ) const {
-    if (m_OpenJob.isAlive())
+    if (m_OpenJob.hasData())
         return m_OpenJob.data().lineIndexerPtr->get(lineIdx, fromCol, colsNum, outLineTotalLength);
     outLineTotalLength = 0;
     return {};
 }
 
 void Controller::getTextDataSizeImpl(uint64_t& maxColsNum, uint64_t& rowsNum) const {
-    if (m_OpenJob.isAlive()) {
+    if (m_OpenJob.hasData()) {
         m_OpenJob.data().lineIndexerPtr->getTextSize(maxColsNum, rowsNum);
         return;
     }
@@ -96,7 +120,7 @@ void Controller::getTextDataSizeImpl(uint64_t& maxColsNum, uint64_t& rowsNum) co
 }
 
 bool Controller::isReadingFromTmp() const {
-    return m_OpenJob.isAlive() && !m_App.getReadTmpTextFilePath().empty() && m_OpenJob.data().path == m_App.getReadTmpTextFilePath();
+    return m_OpenJob.hasData() && !m_App.getReadTmpTextFilePath().empty() && m_OpenJob.data().path == m_App.getReadTmpTextFilePath();
 }
 
 void Controller::removeTmpFiles(const bool r, const bool w) const {
@@ -108,17 +132,22 @@ void Controller::removeTmpFiles(const bool r, const bool w) const {
 }
 
 void Controller::openGeneratedTmpFile() {
-    // exchange tmp files
-    if (!m_App.getReadTmpTextFilePath().empty() && !m_App.getWriteTmpTextFilePath().empty()) {
+    const auto& readPath = m_App.getReadTmpTextFilePath();
+    const auto& writePath = m_App.getWriteTmpTextFilePath();
+    if (!readPath.empty() && !writePath.empty()) {
         std::error_code ec;
-        std::filesystem::remove(m_App.getReadTmpTextFilePath(), ec);
-        std::filesystem::rename(m_App.getWriteTmpTextFilePath(), m_App.getReadTmpTextFilePath(), ec);
+        std::filesystem::remove(readPath, ec);
+        std::filesystem::rename(writePath, readPath, ec);
+        if (ec) {
+            m_Ui.showErrorMsg("Cannot move the temporary file into place");
+            return;
+        }
     }
-    openImpl(m_App.getReadTmpTextFilePath());
+    openImpl(readPath);
 }
 
 void Controller::openImpl(std::filesystem::path path) {
-    if (m_OpenJob.isAlive()) {
+    if (m_OpenJob.hasData()) {
         std::error_code ec;
         if (std::filesystem::equivalent(path, m_OpenJob.data().path, ec))
             return; // already open(ed/ing)
@@ -135,19 +164,21 @@ void Controller::openImpl(std::filesystem::path path) {
     }
     payload.path = std::move(path);
 
-    if (!m_OpenJob.isAlive()) {
+    if (!m_OpenJob.hasData()) {
         startOpenJob(std::move(payload));
         return;
     }
 
-    // std::function requires a copyable closure -> transform unique_ptr to shared_ptr
-    closeImpl([this, sp = std::make_shared<OpenPayload>(std::move(payload))] {
-        startOpenJob(std::move(*sp));
-    });
+    // std::function requires a copyable closure -> transform to shared_ptr
+    closeImpl();
+    setPendingAction(
+        [this] { return !m_OpenJob.hasData(); },
+        [this, sp = std::make_shared<OpenPayload>(std::move(payload))] { startOpenJob(std::move(*sp)); }
+    );
 }
 
 void Controller::startOpenJob(OpenPayload&& payload) {
-    assert(!m_OpenJob.isAlive());
+    assert(!m_OpenJob.hasData());
 
     payload.progressPtr = m_Ui.pushProgress("Indexing");
 
@@ -160,14 +191,7 @@ void Controller::startOpenJob(OpenPayload&& payload) {
 
     const auto fileName = m_OpenJob.data().path.filename();
     m_App.setWindowTitle(fileName.c_str());
-    m_Ui.setFileOpened({
-        [this] (const uint64_t line, const uint64_t col, const uint64_t cols, uint64_t& outLen) {
-            return getTextDataImpl(line, col, cols, outLen);
-        },
-        [this] (uint64_t& maxCols, uint64_t& rows) {
-            getTextDataSizeImpl(maxCols, rows);
-        }
-    });
+    m_Ui.setFileOpened(&m_TextSource);
 }
 
 std::optional<std::string> Controller::openJobRoutine(const OpenPayload& d, const std::stop_token& st) {
@@ -176,7 +200,7 @@ std::optional<std::string> Controller::openJobRoutine(const OpenPayload& d, cons
 
 // ReSharper disable once CppPassValueParameterByConstReference
 void Controller::onOpenJobFinished(std::optional<std::string> errorOpt, const bool wasCancelled) {
-    if (!m_OpenJob.isAlive())
+    if (!m_OpenJob.hasData())
         return;
     m_OpenJob.releaseTask();
     m_OpenJob.data().progressPtr.reset();
@@ -190,14 +214,14 @@ void Controller::onOpenJobFinished(std::optional<std::string> errorOpt, const bo
 }
 
 void Controller::downloadImpl(std::string url) {
-    if (m_DownloadJob.isAlive()) {
+    if (m_DownloadJob.hasData()) {
         confirmJobCancelThen(
             "Downloading is already running.\nCancel it and start a new one?", m_DownloadJob,
             [this, u = std::move(url)] { downloadImpl(u); }
         );
         return;
     }
-    if (m_GenJob.isAlive()) {
+    if (m_GenJob.hasData()) {
         confirmJobCancelThen(
             "The temp file is busy with Generate.\nCancel it and start the download?", m_GenJob,
             [this, u = std::move(url)] { downloadImpl(u); }
@@ -239,7 +263,7 @@ std::optional<std::string> Controller::downloadJobRoutine(DownloadPayload& d, co
 
 // ReSharper disable once CppPassValueParameterByConstReference
 void Controller::onDownloadJobFinished(std::optional<std::string> errorOpt, const bool wasCancelled) {
-    if (!m_DownloadJob.isAlive())
+    if (!m_DownloadJob.hasData())
         return;
     m_DownloadJob.clear();
 
@@ -250,29 +274,30 @@ void Controller::onDownloadJobFinished(std::optional<std::string> errorOpt, cons
         return;
     }
 
-    if (!m_OpenJob.isAlive()) {
+    if (!m_OpenJob.hasData()) {
         openGeneratedTmpFile();
         return;
     }
 
-    m_Ui.showInfoMsg({"File has been downloaded. Open it?", [this] (const bool ok) {
+    m_Ui.showMessage({"File has been downloaded. Open it?", [this] (const bool ok) {
         if (!ok) {
             removeTmpFiles(false, true);
             return;
         }
-        closeImpl([this] { openGeneratedTmpFile(); });
+        closeImpl();
+        setPendingAction([this] { return !m_OpenJob.hasData(); }, [this] { openGeneratedTmpFile(); });
     }});
 }
 
 void Controller::genImpl(const uint64_t targetBytes, const uint64_t targetLines) {
-    if (m_GenJob.isAlive()) {
+    if (m_GenJob.hasData()) {
         confirmJobCancelThen(
             "Generation is already running.\nCancel it and start a new one?", m_GenJob,
             [this, targetBytes, targetLines] { genImpl(targetBytes, targetLines); }
         );
         return;
     }
-    if (m_DownloadJob.isAlive()) {
+    if (m_DownloadJob.hasData()) {
         confirmJobCancelThen(
             "The temp file is busy with Download.\nCancel it and start generating?", m_DownloadJob,
             [this, targetBytes, targetLines] { genImpl(targetBytes, targetLines); }
@@ -318,7 +343,7 @@ std::optional<std::string> Controller::genJobRoutine(const GenPayload& d, const 
 
 // ReSharper disable once CppPassValueParameterByConstReference
 void Controller::onGenJobFinished(std::optional<std::string> errorOpt, const bool wasCancelled) {
-    if (!m_GenJob.isAlive())
+    if (!m_GenJob.hasData())
         return;
     m_GenJob.clear();
 
@@ -329,22 +354,23 @@ void Controller::onGenJobFinished(std::optional<std::string> errorOpt, const boo
         return;
     }
 
-    if (!m_OpenJob.isAlive()) {
+    if (!m_OpenJob.hasData()) {
         openGeneratedTmpFile();
         return;
     }
 
-    m_Ui.showInfoMsg({"File has been generated. Open it?", [this] (const bool ok) {
+    m_Ui.showMessage({"File has been generated. Open it?", [this] (const bool ok) {
         if (!ok) {
             removeTmpFiles(false, true);
             return;
         }
-        closeImpl([this] { openGeneratedTmpFile(); });
+        closeImpl();
+        setPendingAction([this] { return !m_OpenJob.hasData(); }, [this] { openGeneratedTmpFile(); });
     }});
 }
 
 void Controller::saveImpl(std::filesystem::path targetPath) {
-    if (!m_OpenJob.isAlive())
+    if (!m_OpenJob.hasData())
         return;
 
     std::error_code ec;
@@ -354,7 +380,7 @@ void Controller::saveImpl(std::filesystem::path targetPath) {
         return;
     }
 
-    if (m_SaveJob.isAlive()) {
+    if (m_SaveJob.hasData()) {
         confirmJobCancelThen(
             "Saving is already running.\nCancel it and start a new one?", m_SaveJob,
             [this, t = std::move(targetPath)] { saveImpl(t); }
@@ -410,7 +436,7 @@ std::optional<std::string> Controller::saveJobRoutine(const SavePayload& d, cons
 
 // ReSharper disable once CppPassValueParameterByConstReference
 void Controller::onSaveJobFinished(std::optional<std::string> errorOpt, const bool wasCancelled) {
-    if (!m_SaveJob.isAlive())
+    if (!m_SaveJob.hasData())
         return;
 
     const auto targetPath = m_SaveJob.data().targetPath;
@@ -429,11 +455,15 @@ void Controller::onSaveJobFinished(std::optional<std::string> errorOpt, const bo
 }
 
 void Controller::findImpl(cmd::Find cmd) {
-    if (!m_OpenJob.isAlive() || cmd.needle.empty())
+    if (!m_OpenJob.hasData() || cmd.needle.empty())
         return;
 
-    if (m_SearchJob.isAlive()) {
-        m_SearchJob.cancel([this, c = std::move(cmd)] () mutable { findImpl(std::move(c)); });
+    if (m_SearchJob.hasData()) {
+        m_SearchJob.cancel();
+        setPendingAction(
+            [this] { return !m_SearchJob.isRunning(); },
+            [this, c = std::move(cmd)] () mutable { findImpl(std::move(c)); }
+        );
         return;
     }
 
@@ -479,7 +509,7 @@ std::optional<std::string> Controller::searchJobRoutine(SearchPayload& d, const 
 
 // ReSharper disable once CppPassValueParameterByConstReference
 void Controller::onSearchJobFinished(std::optional<std::string> errorOpt, const bool wasCancelled) {
-    if (!m_SearchJob.isAlive())
+    if (!m_SearchJob.hasData())
         return;
 
     const auto result = m_SearchJob.data().result;
@@ -493,7 +523,7 @@ void Controller::onSearchJobFinished(std::optional<std::string> errorOpt, const 
     }
 
     uint64_t colIdx = 0, lineIdx = 0;
-    if (!result.found || !m_OpenJob.isAlive() || !m_OpenJob.data().lineIndexerPtr->locate(result.offsetBytes, colIdx, lineIdx)) {
+    if (!result.found || !m_OpenJob.hasData() || !m_OpenJob.data().lineIndexerPtr->locate(result.offsetBytes, colIdx, lineIdx)) {
         m_CurrentMatchOffsetOpt.reset();
         m_Ui.setSearchResult(false);
         return;
@@ -504,29 +534,28 @@ void Controller::onSearchJobFinished(std::optional<std::string> errorOpt, const 
     m_Ui.showSearchMatch(colIdx, lineIdx);
 }
 
-void Controller::closeImpl(std::function<void()> deferredFunc) {
-    if (!m_OpenJob.isAlive()) {
-        if (deferredFunc)
-            deferredFunc();
+void Controller::closeImpl() {
+    if (!m_OpenJob.hasData())
         return;
-    }
 
-    if (isReadingFromTmp() && m_SaveJob.isAlive()) {
+    if (isReadingFromTmp() && m_SaveJob.isRunning()) {
         confirmJobCancelThen(
             "The file you are closing is being saved.\nCancel saving?", m_SaveJob,
-            [this, def = std::move(deferredFunc)] { closeImpl(def); }
+            [this] { closeImpl(); }
         );
         return;
     }
 
-    if (m_SearchJob.isAlive()) {
-        m_SearchJob.cancel([this, def = std::move(deferredFunc)] { closeImpl(def); });
+    if (m_SearchJob.isRunning()) {
+        m_SearchJob.cancel();
+        setPendingAction([this] { return !m_SearchJob.isRunning(); }, [this] { closeImpl(); });
         return;
     }
 
     if (m_OpenJob.isRunning()) {
         // still indexing
-        cancelJob(m_OpenJob, std::move(deferredFunc));
+        cancelJob(m_OpenJob);
+        setPendingAction([this] { return !m_OpenJob.isRunning(); }, [this] { closeImpl(); });
         return;
     }
 
@@ -539,7 +568,4 @@ void Controller::closeImpl(std::function<void()> deferredFunc) {
 
     if (wasReadingFromTmp)
         removeTmpFiles(true, false);
-
-    if (deferredFunc)
-        deferredFunc();
 }

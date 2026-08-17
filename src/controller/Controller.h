@@ -38,6 +38,16 @@ private:
     std::string_view getTextDataImpl(uint64_t lineIdx, uint64_t fromCol, uint64_t colsNum, uint64_t& outLineTotalLength) const;
     void getTextDataSizeImpl(uint64_t& maxColsNum, uint64_t& rowsNum) const;
 
+    struct TextSource final : TextView::Source {
+        explicit TextSource(const Controller& owner) : controller(owner) {}
+
+        std::string_view getLine(uint64_t lineIdx, uint64_t fromCol, uint64_t colsNum, uint64_t& outLineTotalLength) const override;
+        void getTextSize(uint64_t& maxColsNum, uint64_t& rowsNum) const override;
+
+        const Controller& controller;
+    };
+    TextSource m_TextSource{*this};
+
     bool isReadingFromTmp() const;
     void removeTmpFiles(bool r, bool w) const;
     void openGeneratedTmpFile();
@@ -45,18 +55,28 @@ private:
     Win32App& m_App;
     Ui& m_Ui;
 
+    struct PendingAction { std::function<bool()> isReady; std::function<void()> run; };
+    std::optional<PendingAction> m_PendingActionOpt;
+
+    void setPendingAction(std::function<bool()> isReady, std::function<void()> run);
+    void runPendingAction();
+
     template <typename Payload>
-    static void cancelJob(Job<Payload>& job, std::function<void()> deferred = nullptr) {
-        if (job.isAlive() && job.data().progressPtr)
+    static void cancelJob(Job<Payload>& job) {
+        if (job.hasData() && job.data().progressPtr)
             job.data().progressPtr->setCancelled();
-        job.cancel(std::move(deferred));
+        job.cancel();
     }
 
     template <typename Payload>
     void confirmJobCancelThen(std::string question, Job<Payload>& job, std::function<void()> then) {
-        m_Ui.showInfoMsg({std::move(question), [&job, t = std::move(then)] (const bool ok) mutable {
-            if (ok)
-                cancelJob(job, std::move(t));
+        m_Ui.showMessage({std::move(question), [this, &job, t = std::move(then)] (const bool ok) mutable {
+            if (!ok) {
+                m_PendingActionOpt.reset();
+                return;
+            }
+            cancelJob(job);
+            setPendingAction([&job] { return !job.isRunning(); }, std::move(t));
         }});
     }
 
@@ -122,5 +142,5 @@ private:
     static std::optional<std::string> searchJobRoutine(SearchPayload& d, const std::stop_token& st);
     void onSearchJobFinished(std::optional<std::string> errorOpt, bool wasCancelled);
 
-    void closeImpl(std::function<void()> deferredFunc = nullptr);
+    void closeImpl();
 };

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <windows.h>
 

@@ -64,9 +64,7 @@ std::span<const char> FileMapping::view(const uint64_t offsetBytes, size_t numBy
 
         const uint64_t windowSizeBytes = std::max<uint64_t>(kMinWindowSizeBytes, numBytes);
 
-        // centre the request in the window, so a jump in either direction stays inside it
-        const uint64_t backOffsetBytes = (windowSizeBytes - numBytes) / 2;
-        uint64_t startBytes = offsetBytes > backOffsetBytes ? offsetBytes - backOffsetBytes : 0; // clamp to 0
+        uint64_t startBytes = offsetBytes;
 
         // align to the allocation granularity
         const uint64_t alignmentShiftBytes = startBytes % static_cast<uint64_t>(allocationGranularity());

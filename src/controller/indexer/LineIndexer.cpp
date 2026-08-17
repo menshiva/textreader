@@ -28,8 +28,6 @@ std::optional<std::string> LineIndexer::startScan(const std::stop_token& st, std
     const uint64_t contentStartOffsetBytes = chunk.size() >= 3 && static_cast<unsigned char>(chunk[0]) == 0xEF
         && static_cast<unsigned char>(chunk[1]) == 0xBB && static_cast<unsigned char>(chunk[2]) == 0xBF
         ? 3 : 0;
-    if (contentStartOffsetBytes >= fileSizeBytes)
-        return std::nullopt;
 
     // reserve max possible size to preserve stable pointers in get() function
     m_Anchors.reserve(fileSizeBytes / kBytesPerAnchor + 2);
@@ -58,12 +56,20 @@ std::optional<std::string> LineIndexer::startScan(const std::stop_token& st, std
     };
 
     const auto publishData = [&] (const float progress, const uint64_t scannedBytes) {
+        // https://en.cppreference.com/w/cpp/atomic/memory_order#Release-Acquire_ordering
         outProgress.store(progress, std::memory_order_relaxed);
         m_MaxLineLength.store(maxLineLength, std::memory_order_relaxed);
         m_AvailableAnchorsNum.store(m_Anchors.size(), std::memory_order_release);
         m_LinesNum.store(currentLineIdx, std::memory_order_release);
         m_ScannedBytes.store(scannedBytes, std::memory_order_release);
     };
+
+    if (contentStartOffsetBytes >= fileSizeBytes) {
+        // edge case - a file with only bom
+        publishData(1.0f, fileSizeBytes);
+        m_ScanFilePtr.reset();
+        return std::nullopt;
+    }
 
     const auto totalToProcessDbl = static_cast<double>(fileSizeBytes - contentStartOffsetBytes);
 
@@ -155,7 +161,7 @@ uint64_t LineIndexer::computeLineOffsetBytes(const uint64_t lineIdx) const {
     if (m_CacheData.lineIdx == lineIdx)
         return m_CacheData.lineStartOffsetBytes;
 
-    const size_t anchorsNum = m_AvailableAnchorsNum.load(std::memory_order_relaxed);
+    const size_t anchorsNum = m_AvailableAnchorsNum.load(std::memory_order_acquire);
     if (!anchorsNum)
         return UINT64_MAX;
 

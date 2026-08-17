@@ -41,10 +41,24 @@ public:
     const std::filesystem::path& getReadTmpTextFilePath() const { return m_ReadTmpTextFilePath; }
     const std::filesystem::path& getWriteTmpTextFilePath() const { return m_WriteTmpTextFilePath; }
 private:
-    bool CreateDeviceD3D();
-    void CleanupDeviceD3D();
-    void CreateRenderTarget();
-    void CleanupRenderTarget();
+    bool createDeviceD3D();
+    void cleanupDeviceD3D();
+    void createRenderTarget();
+    void cleanupRenderTarget();
+
+    // IFileDialog is a COM object, so an apartment has to exist before it is created
+    // https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-coinitializeex
+    struct ComApartment {
+        ComApartment();
+        ~ComApartment();
+
+        ComApartment(const ComApartment&) = delete;
+        ComApartment& operator=(const ComApartment&) = delete;
+        ComApartment(ComApartment&&) noexcept = delete;
+        ComApartment& operator=(ComApartment&&) noexcept = delete;
+    private:
+        bool m_MustUninitialize = false;
+    } m_ComApartment;
 
     struct WindowData {
         const wchar_t* initialWindowName;

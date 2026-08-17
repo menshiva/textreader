@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <variant>
 
@@ -9,8 +10,12 @@ namespace cmd {
         std::string url;
     };
     struct GenRandom {
+        enum class Type : uint8_t { Kb = 0, Mb, Gb, Lines };
+        static constexpr const char* kTypeNames[] = {"Kb", "Mb", "Gb", "Lines"};
+        static constexpr int kTypeCount = std::size(kTypeNames);
+
         uint32_t value;
-        enum class Type : uint8_t { Kb = 0, Mb, Gb, Lines } type;
+        Type type;
     };
     struct SaveAs {};
     struct Close {};

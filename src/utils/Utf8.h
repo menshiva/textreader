@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <cstring>
+
 namespace utf8 {
     inline bool isContinuationByte(const unsigned char c) {
         // utf-8 always has 10xxxxxx
@@ -24,7 +27,7 @@ namespace utf8 {
         // taken from: https://doc.rust-lang.org/src/core/str/count.rs.html
         while (dataEnd - dataBegin >= 8) {
             uint64_t w;
-            memcpy(&w, dataBegin, 8);
+            std::memcpy(&w, dataBegin, 8);
             const uint64_t leads = ((~w >> 7) | (w >> 6)) & 0x0101010101010101ull;
             res += (leads * 0x0101010101010101ull) >> 56;
             dataBegin += 8;

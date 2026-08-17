@@ -1,9 +1,11 @@
-﻿#pragma once
+#pragma once
 
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
-#include "imgui_internal.h"
+#include <string_view>
+#include "imgui.h"
 
 class Ui;
 
@@ -18,10 +20,11 @@ public:
     TextView& operator=(TextView&&) noexcept = delete;
 
     struct Source {
-        std::function<std::string_view(uint64_t lineIdx, uint64_t fromCol, uint64_t colsNum, uint64_t& outLineTotalLength)> getLine;
-        std::function<void(uint64_t& maxColsNum, uint64_t& rowsNum)> getTextSize;
+        virtual ~Source() = default;
+        virtual std::string_view getLine(uint64_t lineIdx, uint64_t fromCol, uint64_t colsNum, uint64_t& outLineTotalLength) const = 0;
+        virtual void getTextSize(uint64_t& maxColsNum, uint64_t& rowsNum) const = 0;
     };
-    void reset(Source source = Source{nullptr, nullptr});
+    void reset(const Source* sourcePtr = nullptr);
     void draw();
 
     void setSearchNeedle(std::string needle);
@@ -36,27 +39,7 @@ private:
 
     uint64_t getFirstWholeVisibleIdx(Axis axis) const;
 
-    struct LayoutData {
-        struct FontMetrics {
-            float visibleNumFlt;
-            uint64_t fullVisibleNum;
-            uint64_t maxDrawnNum;
-        } xyMetrics[kAxisCount];
-
-        uint64_t xySourceSize[kAxisCount];
-
-        ImRect gutterRegion;
-
-        struct ScrollbarData {
-            ImRect region;
-            double maxPos;
-            float grabSize;
-            float travel;
-        };
-        std::optional<ScrollbarData> xyScrollbarDataOpt[kAxisCount];
-
-        std::optional<ImRect> textViewRegionOpt;
-    };
+    struct LayoutData;
 
     static double computeMaxPos(uint64_t sourceSize, float visibleNumFlt);
     static double computeMaxPos(const LayoutData& layoutData, Axis axis);
@@ -85,7 +68,9 @@ private:
         std::optional<Animation> currentAnimationOpt;
     };
 
-    float computeScrollbarGrab(const ImVec2& fontSize, const LayoutData::ScrollbarData& scrollBarData, Axis axis) const;
+    struct ScrollbarData;
+
+    float computeScrollbarGrab(const ImVec2& fontSize, const ScrollbarData& scrollBarData, Axis axis) const;
 
     void scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, Axis axis);
 
@@ -102,7 +87,7 @@ private:
     void animateTo(const ImVec2& fontSize, const LayoutData& layoutData, double targetPos, Axis axis);
 
     struct TextPos { uint64_t col = 0; uint64_t line = 0; };
-    TextPos getPosFromMouse(const ImRect& textViewRegion, const ImVec2& fontSize, uint64_t sourceLinesNum) const;
+    TextPos getPosFromMouse(const struct ImRect& textViewRegion, const ImVec2& fontSize, uint64_t sourceLinesNum) const;
     bool getSelectionRange(TextPos& outFrom, TextPos& outTo) const;
     void copySelection() const;
 
@@ -110,7 +95,7 @@ private:
 
     Ui& m_ParentUi;
 
-    Source m_Source;
+    const Source* m_SourcePtr = nullptr;
     ScrollData m_xyScrollData[kAxisCount];
     uint64_t m_LastVisibleLinesNum = 0;
     uint64_t m_MaxVisibleLineLength = 0;
@@ -144,4 +129,5 @@ private:
     static constexpr float kSelectionAutoScrollSpeedModifier = 0.20f;
 
     static constexpr size_t kMaxCopyMb = 16;
+    static constexpr uint64_t kMaxCopyLines = 50000;
 };

@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include <atomic>
 #include <functional>
 #include <optional>
 #include <string>
@@ -20,11 +21,11 @@ public:
     AsyncTask(AsyncTask&&) noexcept = delete;
     AsyncTask& operator=(AsyncTask&&) noexcept = delete;
 
-    void requestCancel(std::function<void()> deferredCallback = nullptr);
-    void join();
+    void requestCancel();
+    void complete();
 
     // true once the worker has produced its result and the callbacks have not fired yet
-    bool producedResults() const { return m_Running && m_Finished.load(std::memory_order_acquire); }
+    bool isFinished() const { return m_Running && m_Finished.load(std::memory_order_acquire); }
 private:
     bool m_Running = true;
 
@@ -32,7 +33,6 @@ private:
     std::optional<std::string> m_ErrorOpt;
 
     OnComplete m_OnCompleteCallback;
-    std::function<void()> m_DeferredCancelCallback;
 
     std::jthread m_Thread;
 };

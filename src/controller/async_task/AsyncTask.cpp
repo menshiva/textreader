@@ -13,19 +13,16 @@ AsyncTask::AsyncTask(
 
 AsyncTask::~AsyncTask() {
     m_OnCompleteCallback = nullptr;
-    m_DeferredCancelCallback = nullptr;
     // jthread does request_stop() + join() by itself
 }
 
-void AsyncTask::requestCancel(std::function<void()> deferredCallback) {
-    if (m_Running) {
-        m_DeferredCancelCallback = std::move(deferredCallback);
+void AsyncTask::requestCancel() {
+    if (m_Running)
         m_Thread.request_stop();
-    }
 }
 
-void AsyncTask::join() {
-    assert(producedResults());
+void AsyncTask::complete() {
+    assert(isFinished());
 
     m_Running = false;
     const bool wasCancelled = m_Thread.get_stop_token().stop_requested();
@@ -34,7 +31,4 @@ void AsyncTask::join() {
 
     if (m_OnCompleteCallback)
         m_OnCompleteCallback(std::move(m_ErrorOpt), wasCancelled);
-
-    if (wasCancelled && m_DeferredCancelCallback)
-        m_DeferredCancelCallback();
 }

@@ -1,13 +1,39 @@
 ﻿#include "TextView.h"
 #include <algorithm>
 #include <charconv>
+#include "imgui_internal.h"
 #include "../../utils/Utf8.h"
 #include "../Ui.h"
 
+struct TextView::ScrollbarData {
+    ImRect region;
+    double maxPos;
+    float grabSize;
+
+    // how far the grab can slide along its track
+    float travelFor(const Axis axis) const { return region.Max[axis] - region.Min[axis] - grabSize; }
+};
+
+struct TextView::LayoutData {
+    struct FontMetrics {
+        float visibleNumFlt;
+        uint64_t fullVisibleNum;
+        uint64_t maxDrawnNum;
+    } xyMetrics[kAxisCount];
+
+    uint64_t xySourceSize[kAxisCount];
+
+    ImRect gutterRegion;
+
+    std::optional<ScrollbarData> xyScrollbarDataOpt[kAxisCount];
+
+    std::optional<ImRect> textViewRegionOpt;
+};
+
 TextView::TextView(Ui& parentUi) : m_ParentUi(parentUi) {}
 
-void TextView::reset(Source source) {
-    m_Source = std::move(source);
+void TextView::reset(const Source* sourcePtr) {
+    m_SourcePtr = sourcePtr;
     for (const Axis axis : kAxes) {
         m_xyScrollData[axis].firstIdx = 0;
         m_xyScrollData[axis].pixelOffsetRemainder = 0.0f;
@@ -27,7 +53,7 @@ void TextView::reset(Source source) {
 }
 
 void TextView::draw() {
-    if (!m_Source.getLine || !m_Source.getTextSize)
+    if (!m_SourcePtr)
         return;
 
     ImGui::BeginChild(
@@ -40,7 +66,7 @@ void TextView::draw() {
     const ImVec2 fontSize{ImGui::GetFontBaked()->GetCharAdvance('0'), ImGui::GetTextLineHeight()};
 
     uint64_t sourceTextSize[kAxisCount] = {0, 0};
-    m_Source.getTextSize(sourceTextSize[kAxisX], sourceTextSize[kAxisY]);
+    m_SourcePtr->getTextSize(sourceTextSize[kAxisX], sourceTextSize[kAxisY]);
 
     LayoutData layoutData;
     if (!computeLayoutData(windowRegionMin, windowRegionSize, fontSize, sourceTextSize, layoutData)) {
@@ -192,18 +218,18 @@ bool TextView::computeLayoutData(
     }
 
     static constexpr auto computeScrollbarData = [] (
-        const ImRect& region, const float trackSize,
+        const ImRect& region, const Axis axis,
         const LayoutData::FontMetrics& fontMetrics, const uint64_t sourceSize
     ) {
-        LayoutData::ScrollbarData data{region};
+        ScrollbarData data{region};
         data.maxPos = computeMaxPos(sourceSize, fontMetrics.visibleNumFlt);
 
+        const float trackSize = region.Max[axis] - region.Min[axis];
         const double visibleFraction = static_cast<double>(fontMetrics.visibleNumFlt) / static_cast<double>(sourceSize);
         data.grabSize = std::clamp(
             static_cast<float>(trackSize * visibleFraction),
             std::min(kScrollbarMinGrabSize, trackSize), trackSize
         );
-        data.travel = trackSize - data.grabSize;
 
         return data;
     };
@@ -216,14 +242,14 @@ bool TextView::computeLayoutData(
             ImVec2(windowRegionMin.x, windowRegionMax.y - horizontalScrollbarHeight),
             ImVec2(windowRegionMax.x - verticalScrollbarWidth, windowRegionMax.y)
         );
-        outData.xyScrollbarDataOpt[kAxisX].emplace(computeScrollbarData(region, region.GetWidth(), outData.xyMetrics[kAxisX], sourceTextSize[kAxisX]));
+        outData.xyScrollbarDataOpt[kAxisX].emplace(computeScrollbarData(region, kAxisX, outData.xyMetrics[kAxisX], sourceTextSize[kAxisX]));
     }
     if (verticalScrollbarWidth != 0.0f) {
         const ImRect region(
             ImVec2(windowRegionMax.x - verticalScrollbarWidth, windowRegionMin.y),
             ImVec2(windowRegionMax.x, windowRegionMax.y - horizontalScrollbarHeight)
         );
-        outData.xyScrollbarDataOpt[kAxisY].emplace(computeScrollbarData(region, region.GetHeight(), outData.xyMetrics[kAxisY], sourceTextSize[kAxisY]));
+        outData.xyScrollbarDataOpt[kAxisY].emplace(computeScrollbarData(region, kAxisY, outData.xyMetrics[kAxisY], sourceTextSize[kAxisY]));
     }
 
     {
@@ -348,7 +374,7 @@ void TextView::drawText(const LayoutData& layoutData, const ImVec2& fontSize) {
             break;
 
         uint64_t totalLineLength = 0;
-        const auto lineText = m_Source.getLine(lineIdx, fetchFromCol, fetchColsNum, totalLineLength);
+        const auto lineText = m_SourcePtr->getLine(lineIdx, fetchFromCol, fetchColsNum, totalLineLength);
         if (totalLineLength > m_MaxVisibleLineLength)
             m_MaxVisibleLineLength = totalLineLength;
         if (lineText.empty())
@@ -392,14 +418,14 @@ void TextView::drawText(const LayoutData& layoutData, const ImVec2& fontSize) {
     dl->PopClipRect();
 }
 
-float TextView::computeScrollbarGrab(const ImVec2& fontSize, const LayoutData::ScrollbarData& scrollBarData, const Axis axis) const {
+float TextView::computeScrollbarGrab(const ImVec2& fontSize, const ScrollbarData& scrollBarData, const Axis axis) const {
     double posFraction = 0.0;
     if (scrollBarData.maxPos > 0.0) {
         const auto& scrollData = m_xyScrollData[axis];
         const double currentScrollPos = static_cast<double>(scrollData.firstIdx) + static_cast<double>(scrollData.pixelOffsetRemainder / fontSize[axis]);
         posFraction = std::clamp(currentScrollPos / scrollBarData.maxPos, 0.0, 1.0);
     }
-    return scrollBarData.region.Min[axis] + static_cast<float>(scrollBarData.travel * posFraction);
+    return scrollBarData.region.Min[axis] + static_cast<float>(static_cast<double>(scrollBarData.travelFor(axis)) * posFraction);
 }
 
 void TextView::scrollByPixels(const ImVec2& fontSize, const ImVec2& delta, const Axis axis) {
@@ -440,7 +466,7 @@ bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& 
         for (const Axis axis : kAxes)
             m_xyScrollData[axis].scrollbarDragOffsetOpt.reset();
 
-    const LayoutData::ScrollbarData* scrollbarDataPtrs[kAxisCount];
+    const ScrollbarData* scrollbarDataPtrs[kAxisCount];
     for (const Axis axis : kAxes) {
         scrollbarDataPtrs[axis] = layoutData.xyScrollbarDataOpt[axis].has_value() ? &*layoutData.xyScrollbarDataOpt[axis] : nullptr;
         if (!scrollbarDataPtrs[axis])
@@ -466,7 +492,7 @@ bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& 
                 }
                 else {
                     // background click
-                    const float travel = scrollbarDataPtr->travel;
+                    const float travel = scrollbarDataPtr->travelFor(axis);
                     if (travel > 0.0f) {
                         const float rel = std::clamp(
                             (mousePos - scrollbarDataPtr->grabSize * 0.5f - scrollbarDataPtr->region.Min[axis]) / travel,
@@ -490,9 +516,10 @@ bool TextView::handleScrollbarInput(const LayoutData& layoutData, const ImVec2& 
             if (scrollData.currentAnimationOpt.has_value())
                 return true; // background click is still animating
 
-            if (scrollbarDataPtr->travel > 0.0f) {
+            const float travel = scrollbarDataPtr->travelFor(axis);
+            if (travel > 0.0f) {
                 const float rel = std::clamp(
-                    (io.MousePos[axis] - *scrollData.scrollbarDragOffsetOpt - scrollbarDataPtr->region.Min[axis]) / scrollbarDataPtr->travel,
+                    (io.MousePos[axis] - *scrollData.scrollbarDragOffsetOpt - scrollbarDataPtr->region.Min[axis]) / travel,
                     0.0f, 1.0f
                 );
                 setPos(fontSize, static_cast<double>(rel) * scrollbarDataPtr->maxPos, axis);
@@ -692,28 +719,36 @@ void TextView::copySelection() const {
     if (!getSelectionRange(from, to))
         return;
 
+    const uint64_t lastLineIdx = std::min(to.line, from.line + kMaxCopyLines - 1);
+
     std::string text;
-    for (uint64_t lineIdx = from.line; lineIdx <= to.line; ++lineIdx) {
+    bool truncated = lastLineIdx < to.line;
+    uint64_t copiedLines = 0;
+    for (uint64_t lineIdx = from.line; lineIdx <= lastLineIdx; ++lineIdx) {
         const uint64_t fromCol = lineIdx == from.line ? from.col : 0;
         const uint64_t colsNum = lineIdx == to.line ? to.col - fromCol : UINT64_MAX;
         uint64_t tmp = 0;
-        const auto lineText = m_Source.getLine(lineIdx, fromCol, colsNum, tmp);
+        const auto lineText = m_SourcePtr->getLine(lineIdx, fromCol, colsNum, tmp);
 
         if (lineIdx != from.line)
             text += "\r\n";
         text.append(lineText);
+        ++copiedLines;
 
-        if (text.size() >= kMaxCopyBytes)
+        if (text.size() >= kMaxCopyBytes) {
+            truncated = truncated || lineIdx < to.line;
             break;
+        }
     }
     if (text.empty())
         return;
 
     ImGui::SetClipboardText(text.c_str());
 
-    if (text.size() >= kMaxCopyBytes) {
-        m_ParentUi.showInfoMsg({
-            "The selection is too large to copy.\nCopied the first ~" + std::to_string(kMaxCopyMb) + " Mb.",
+    if (truncated) {
+        m_ParentUi.showMessage({
+            "The selection is too large to copy.\nCopied the first " + std::to_string(copiedLines)
+                + " lines (" + std::to_string(text.size() >> 20) + " Mb).",
             nullptr
         });
     }

@@ -1,4 +1,4 @@
-﻿#include "Win32App.h"
+#include "Win32App.h"
 #include "imgui_impl_win32.h"
 #include <shobjidl.h>
 #include <wrl/client.h>
@@ -12,8 +12,8 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 // - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
 // Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
 static LRESULT WINAPI WndProc(const HWND hWnd, const UINT msg, const WPARAM wParam, const LPARAM lParam) {
-    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
-        return true;
+    if (const LRESULT handled = ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+        return handled;
 
     static constexpr UINT_PTR kResizeMoveLoopTimerId = 1;
 
@@ -36,6 +36,8 @@ static LRESULT WINAPI WndProc(const HWND hWnd, const UINT msg, const WPARAM wPar
             return 1;
         }
         case WM_ENTERSIZEMOVE: {
+            // dragging the frame puts windows into its own modal loop inside DefWindowProc (DispatchMessage does not return and the main loop stops running)
+            // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-entersizemove
             SetTimer(hWnd, kResizeMoveLoopTimerId, USER_TIMER_MINIMUM, nullptr);
             if (self)
                 self->setInResizeMoveLoop(true);
@@ -60,6 +62,16 @@ static LRESULT WINAPI WndProc(const HWND hWnd, const UINT msg, const WPARAM wPar
     }
 
     return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+Win32App::ComApartment::ComApartment() {
+    const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    m_MustUninitialize = hr != RPC_E_CHANGED_MODE;
+}
+
+Win32App::ComApartment::~ComApartment() {
+    if (m_MustUninitialize)
+        CoUninitialize();
 }
 
 Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH, std::optional<std::string>& outErrorMsgOpt) {
@@ -92,7 +104,7 @@ Win32App::Win32App(const wchar_t* windowName, const UINT initW, const UINT initH
     SetWindowLongPtrW(m_WindowData.hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
     // Initialize Direct3D
-    if (!CreateDeviceD3D()) {
+    if (!createDeviceD3D()) {
         outErrorMsgOpt = "Cannot initialize Direct3D 11";
         return;
     }
@@ -130,7 +142,7 @@ Win32App::~Win32App() {
     if (!m_WriteTmpTextFilePath.empty())
         std::filesystem::remove(m_WriteTmpTextFilePath, ec);
 
-    CleanupDeviceD3D();
+    cleanupDeviceD3D();
     if (m_WindowData.hwnd)
         DestroyWindow(m_WindowData.hwnd);
     UnregisterClassW(m_WindowData.lpClassName, m_WindowData.hInstance);
@@ -154,9 +166,9 @@ bool Win32App::beginFrame() {
 
     // handle window resize
     if (m_D3D11Data.resizeWidth != 0 && m_D3D11Data.resizeHeight != 0) {
-        CleanupRenderTarget();
+        cleanupRenderTarget();
         const HRESULT hr = m_D3D11Data.swapChain->ResizeBuffers(0, m_D3D11Data.resizeWidth, m_D3D11Data.resizeHeight, DXGI_FORMAT_UNKNOWN, 0);
-        CreateRenderTarget();
+        createRenderTarget();
         if (SUCCEEDED(hr) && m_D3D11Data.renderTargetView)
             m_D3D11Data.resizeWidth = m_D3D11Data.resizeHeight = 0;
     }
@@ -200,7 +212,7 @@ void Win32App::setWindowTitle(const std::optional<const wchar_t*>& titleOpt) con
 }
 
 std::optional<std::filesystem::path> Win32App::showTextFileDialog(const bool open) const {
-    constexpr static COMDLG_FILTERSPEC kFilters[] = {
+    static constexpr COMDLG_FILTERSPEC kFilters[] = {
         {L"Text files (*.txt)", L"*.txt"},
         {L"All files (*.*)", L"*.*"}
     };
@@ -244,7 +256,7 @@ std::optional<std::filesystem::path> Win32App::showTextFileDialog(const bool ope
     return p;
 }
 
-bool Win32App::CreateDeviceD3D() {
+bool Win32App::createDeviceD3D() {
     // Setup swap chain
     DXGI_SWAP_CHAIN_DESC sd;
     ZeroMemory(&sd, sizeof(sd));
@@ -280,12 +292,12 @@ bool Win32App::CreateDeviceD3D() {
     if (res != S_OK)
         return false;
 
-    CreateRenderTarget();
+    createRenderTarget();
     return true;
 }
 
-void Win32App::CleanupDeviceD3D() {
-    CleanupRenderTarget();
+void Win32App::cleanupDeviceD3D() {
+    cleanupRenderTarget();
     if (m_D3D11Data.swapChain) {
         m_D3D11Data.swapChain->Release();
         m_D3D11Data.swapChain = nullptr;
@@ -300,7 +312,7 @@ void Win32App::CleanupDeviceD3D() {
     }
 }
 
-void Win32App::CreateRenderTarget() {
+void Win32App::createRenderTarget() {
     ID3D11Texture2D* backBuffer = nullptr;
     if (FAILED(m_D3D11Data.swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer))) || !backBuffer)
         return;
@@ -311,7 +323,7 @@ void Win32App::CreateRenderTarget() {
     backBuffer->Release();
 }
 
-void Win32App::CleanupRenderTarget() {
+void Win32App::cleanupRenderTarget() {
     if (m_D3D11Data.context)
         m_D3D11Data.context->OMSetRenderTargets(0, nullptr, nullptr);
 

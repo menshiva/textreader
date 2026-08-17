@@ -1,4 +1,5 @@
 #include "TextSearcher.h"
+#include <algorithm>
 #include <cassert>
 #include <functional>
 #include "../file/FileReader.h"

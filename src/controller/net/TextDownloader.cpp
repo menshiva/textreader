@@ -15,6 +15,8 @@ std::optional<std::string> http::download(
     FileWriter& writer, const std::stop_token& st, std::atomic<float>& outProgress, ResponseInfo& outInfo,
     const std::string& url, const std::filesystem::path& targetPath
 ) {
+    // synchronous WinHTTP download: https://learn.microsoft.com/en-us/windows/win32/winhttp/winhttp-sessions-overview
+
     // convert std::string url to std::wstring
     std::wstring urlWide;
     if (!url.empty()) {
@@ -133,6 +135,7 @@ std::optional<std::string> http::download(
     size_t used = 0;
     uint64_t received = 0;
 
+    // reading right after WinHttpReceiveResponse "avoids the expense of a buffer copy" (https://learn.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpreaddata)
     while (true) {
         if (st.stop_requested())
             return std::nullopt; // cancelled - the caller throws the temp file away

@@ -1,3 +1,5 @@
+#include "app/Win32App.h"
+#include "ui/Ui.h"
 #include "controller/Controller.h"
 
 static void fatalError(const std::string& msg) {
@@ -21,19 +23,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     Controller controller(app, ui);
 
-    // TODO: remove
-// #ifdef _DEBUG
-    AllocConsole();
-    FILE* dummy;
-    freopen_s(&dummy, "CONOUT$", "w", stdout);
-// #endif
-
     app.setFrameCallback([&app, &ui, &controller] {
         if (app.beginFrame()) {
-            ui.newFrame();
+            Ui::newFrame();
             ui.build();
             app.bindAndClear(ImVec4(0.45f, 0.55f, 0.60f, 1.00f));
-            ui.render();
+            Ui::render();
             app.present(true);
         }
         controller.tick();

@@ -1,6 +1,7 @@
-﻿#pragma once
+#pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <list>
 #include <memory>
@@ -29,15 +30,15 @@ public:
     void build();
     static void render();
 
-    void setFileOpened(TextView::Source source);
+    void setFileOpened(const TextView::Source* sourcePtr);
     void setFileClosed();
 
     void setSearchResult(bool found);
     void setSearchIdle();
     void showSearchMatch(const uint64_t colIdx, const uint64_t lineIdx) { m_TextView.showMatch(colIdx, lineIdx); }
 
-    struct InfoMsgData { std::string infoMsg; std::function<void(bool)> callback;};
-    void showInfoMsg(InfoMsgData msg) { m_InfoMsgData = std::move(msg); }
+    struct MessageData { std::string text; std::function<void(bool)> confirmCallback; };
+    void showMessage(MessageData msg) { m_MessageData = std::move(msg); }
 
     void showErrorMsg(std::string msg) { m_ErrorMsg = std::move(msg); }
 private:
@@ -49,7 +50,7 @@ private:
     void drawModals(const Popups& popups);
     void drawUrlModal();
     void drawGenTextModal();
-    void drawInfoModal();
+    void drawMessageModal();
     void drawErrorModal();
     void drawSearchPanel();
     void drawProgress();
@@ -68,16 +69,15 @@ private:
     bool m_FileOpen = false;
     TextView m_TextView;
 
-    InfoMsgData m_InfoMsgData;
+    MessageData m_MessageData;
     std::string m_ErrorMsg;
 
     static constexpr float kUrlFieldWidthEm = 24.0f;
     char m_UrlBuf[2048] = "";
 
-    static constexpr const char* kGenTextUnits[] = {"Kb", "Mb", "Gb", "Lines"};
     struct GenTextData {
         int value = 1;
-        int unitIdx = 1; // kGenTextUnits
+        int typeIdx = static_cast<int>(cmd::GenRandom::Type::Mb); // cmd::GenRandom::kTypeNames
     } m_GenTextData;
 
     static constexpr float kSearchFieldWidthEm = 20.0f;
@@ -94,7 +94,7 @@ private:
     static constexpr float kProgressBarWidth = 320.0f;
     struct ProgressData {
         std::string name;
-        std::function<void()> cancelClickCallback = nullptr;
+        std::function<void()> cancelClickCallback;
 
         bool cancelled = false;
         std::atomic<float> progress = -1.0f;

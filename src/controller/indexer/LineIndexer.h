@@ -1,8 +1,12 @@
 ﻿#pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <span>
 #include <stop_token>
+#include <string>
+#include <vector>
 
 class FileReader;
 class FileMapping;

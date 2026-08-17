@@ -4,9 +4,11 @@
 #include "../ui/Ui.h"
 #include "async_task/Job.h"
 #include "net/TextDownloader.h"
+#include "search/TextSearcher.h"
 
 class LineIndexer;
 class FileWriter;
+class FileReader;
 
 class Controller {
 public:
@@ -29,6 +31,8 @@ private:
         void operator()(const cmd::GenRandom& cmd) const;
         void operator()(const cmd::SaveAs&) const;
         void operator()(const cmd::Close&) const;
+        void operator()(const cmd::Find& cmd) const;
+        void operator()(const cmd::CancelFind&) const;
     };
 
     std::string_view getTextDataImpl(uint64_t lineIdx, uint64_t fromCol, uint64_t colsNum, uint64_t& outLineTotalLength) const;
@@ -104,6 +108,19 @@ private:
     void saveImpl(std::filesystem::path targetPath);
     static std::optional<std::string> saveJobRoutine(const SavePayload& d, const std::stop_token& st);
     void onSaveJobFinished(std::optional<std::string> errorOpt, bool wasCancelled);
+
+    struct SearchPayload {
+        std::unique_ptr<FileReader> readerPtr;
+        search::Request request;
+        search::Result result;
+        std::unique_ptr<Ui::SearchProgressRAII> progressPtr;
+    };
+    Job<SearchPayload> m_SearchJob;
+    std::optional<uint64_t> m_CurrentMatchOffsetOpt;
+
+    void findImpl(cmd::Find cmd);
+    static std::optional<std::string> searchJobRoutine(SearchPayload& d, const std::stop_token& st);
+    void onSearchJobFinished(std::optional<std::string> errorOpt, bool wasCancelled);
 
     void closeImpl(std::function<void()> deferredFunc = nullptr);
 };

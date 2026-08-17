@@ -64,11 +64,38 @@ void Ui::newFrame() {
 
 void Ui::build() {
     drawMainWindow();
+    drawSearchPanel();
     drawProgress();
 }
 
+void Ui::render() {
+    ImGui::Render();
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+}
+
+void Ui::setFileOpened(TextView::Source source) {
+    m_TextView.reset(std::move(source));
+    m_FileOpen = true;
+    if (m_SearchData.panelOpen)
+        m_TextView.setSearchNeedle(m_SearchData.needleBuf);
+}
+
+void Ui::setFileClosed() {
+    m_TextView.reset();
+    m_FileOpen = false;
+    setSearchIdle();
+}
+
+void Ui::setSearchResult(const bool found) {
+    m_SearchData.resultOpt = found;
+}
+
+void Ui::setSearchIdle() {
+    m_SearchData.resultOpt.reset();
+}
+
 void Ui::drawMainWindow() {
-    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    const auto mainViewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainViewport->WorkPos);
     ImGui::SetNextWindowSize(mainViewport->WorkSize);
 
@@ -91,7 +118,7 @@ void Ui::drawMainWindow() {
     ImGui::End();
 }
 
-void Ui::drawMenuBar(Popups& outPopups) const {
+void Ui::drawMenuBar(Popups& outPopups) {
     if (!ImGui::BeginMenuBar())
         return;
 
@@ -117,27 +144,50 @@ void Ui::drawMenuBar(Popups& outPopups) const {
 
         ImGui::EndMenu();
     }
+
+    if (m_FileOpen && ImGui::BeginMenu("Search")) {
+        if (ImGui::MenuItem("Find...", "Ctrl+F"))
+            openSearchPanel();
+
+        ImGui::EndMenu();
+    }
     ImGui::EndMenuBar();
 }
 
-void Ui::processShortcuts(Popups& outPopups) const {
-    if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) || ImGui::IsAnyItemActive())
+void Ui::processShortcuts(Popups& outPopups) {
+    if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
         return;
 
     auto& io = ImGui::GetIO();
 
-    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O)) {
-        io.ClearInputKeys();
-        execCommand(cmd::OpenFile());
-    }
-    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_U))
-        outPopups.url = true;
-    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_G))
-        outPopups.genText = true;
+    if (!ImGui::IsAnyItemActive()) {
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O)) {
+            io.ClearInputKeys(); // fix sticky ctrl
+            execCommand(cmd::OpenFile());
+        }
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_U))
+            outPopups.url = true;
+        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_G))
+            outPopups.genText = true;
 
-    if (m_FileOpen && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S)) {
-        io.ClearInputKeys();
-        execCommand(cmd::SaveAs());
+        if (m_FileOpen && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S)) {
+            io.ClearInputKeys(); // fix sticky ctrl
+            execCommand(cmd::SaveAs());
+        }
+    }
+
+    if (m_FileOpen) {
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false))
+            openSearchPanel();
+        if (m_SearchData.panelOpen) {
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                closeSearchPanel();
+            }
+            else {
+                if (ImGui::IsKeyPressed(ImGuiKey_F3, false))
+                    sendFindCommand(io.KeyShift);
+            }
+        }
     }
 }
 
@@ -165,56 +215,59 @@ static bool beginCenteredModal(const char* name) {
     );
 }
 
-void Ui::drawUrlModal() const {
+static void setNextWindowAtViewportCorner(const ImVec2& pivot, const ImVec2& margin, const ImGuiCond cond) {
+    const auto viewport = ImGui::GetMainViewport();
+    const ImVec2 corner = viewport->WorkPos + viewport->WorkSize * pivot;
+    const ImVec2 inwards(pivot.x > 0.5f ? -margin.x : margin.x, pivot.y > 0.5f ? -margin.y : margin.y);
+    ImGui::SetNextWindowPos(corner + inwards, cond, pivot);
+}
+
+void Ui::drawUrlModal() {
     if (!beginCenteredModal("Open from URL"))
         return;
 
     if (ImGui::IsWindowAppearing())
         ImGui::SetKeyboardFocusHere();
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24.0f);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * kUrlFieldWidthEm);
 
-    static char urlBuf[2048] = "";
-    const bool enter = ImGui::InputTextWithHint("##url", "URL", urlBuf, IM_COUNTOF(urlBuf), ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool enter = ImGui::InputTextWithHint("##url", "URL", m_UrlBuf, IM_COUNTOF(m_UrlBuf), ImGuiInputTextFlags_EnterReturnsTrue);
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    const bool openDisabled = urlBuf[0] == '\0';
+    const bool openDisabled = m_UrlBuf[0] == '\0';
     if (openDisabled)
         ImGui::BeginDisabled();
     if (ImGui::Button("Open", ImVec2(-FLT_MIN, 0.0f)) || (enter && !openDisabled)) {
-        execCommand(cmd::OpenUrl(urlBuf));
+        execCommand(cmd::OpenUrl(m_UrlBuf));
         ImGui::CloseCurrentPopup();
     }
     if (openDisabled)
         ImGui::EndDisabled();
 
-    if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+    if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         ImGui::CloseCurrentPopup();
 
     ImGui::EndPopup();
 }
 
-void Ui::drawGenTextModal() const {
+void Ui::drawGenTextModal() {
     if (!beginCenteredModal("Generate txt"))
         return;
 
     if (ImGui::IsWindowAppearing())
         ImGui::SetKeyboardFocusHere();
 
-    static int genTxtValue = 1;
-    ImGui::InputInt("##GenTxtInput", &genTxtValue, 0, 0);
+    ImGui::InputInt("##GenTxtInput", &m_GenTextData.value, 0, 0);
 
     ImGui::SameLine();
 
-    static constexpr const char* genTxtComboItems[] = { "Kb", "Mb", "Gb", "Lines" };
-    static int genTxtItemIdx = 1;
-    if (ImGui::BeginCombo("##GenTxtCombo", genTxtComboItems[genTxtItemIdx], ImGuiComboFlags_WidthFitPreview)) {
-        for (int n = 0; n < IM_COUNTOF(genTxtComboItems); ++n) {
-            const bool isSelected = genTxtItemIdx == n;
-            if (ImGui::Selectable(genTxtComboItems[n], isSelected))
-                genTxtItemIdx = n;
+    if (ImGui::BeginCombo("##GenTxtCombo", kGenTextUnits[m_GenTextData.unitIdx], ImGuiComboFlags_WidthFitPreview)) {
+        for (int n = 0; n < IM_COUNTOF(kGenTextUnits); ++n) {
+            const bool isSelected = m_GenTextData.unitIdx == n;
+            if (ImGui::Selectable(kGenTextUnits[n], isSelected))
+                m_GenTextData.unitIdx = n;
             if (isSelected)
                 ImGui::SetItemDefaultFocus();
         }
@@ -225,17 +278,17 @@ void Ui::drawGenTextModal() const {
     ImGui::Separator();
     ImGui::Spacing();
 
-    const bool genButtonDisabled = genTxtValue < 1;
+    const bool genButtonDisabled = m_GenTextData.value < 1;
     if (genButtonDisabled)
         ImGui::BeginDisabled();
     if (ImGui::Button("Generate", ImVec2(-FLT_MIN, 0.0f))) {
-        execCommand(cmd::GenRandom(static_cast<uint32_t>(genTxtValue), static_cast<cmd::GenRandom::Type>(genTxtItemIdx)));
+        execCommand(cmd::GenRandom(static_cast<uint32_t>(m_GenTextData.value), static_cast<cmd::GenRandom::Type>(m_GenTextData.unitIdx)));
         ImGui::CloseCurrentPopup();
     }
     if (genButtonDisabled)
         ImGui::EndDisabled();
 
-    if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+    if (ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         ImGui::CloseCurrentPopup();
 
     ImGui::EndPopup();
@@ -254,21 +307,25 @@ void Ui::drawInfoModal() {
     if (ImGui::IsWindowAppearing())
         ImGui::SetKeyboardFocusHere();
 
-    if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f))) {
-        const auto data = std::move(m_InfoMsgData);
-        ImGui::CloseCurrentPopup();
-        if (data.callback)
-            data.callback(true);
-    }
-
-    if (m_InfoMsgData.callback && ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f))) {
-        const auto data = std::move(m_InfoMsgData);
-        ImGui::CloseCurrentPopup();
-        data.callback(false);
-    }
+    std::optional<bool> answerOpt;
+    if (ImGui::Button("OK", ImVec2(-FLT_MIN, 0.0f)))
+        answerOpt = true;
+    if (m_InfoMsgData.callback && ImGui::Button("Cancel", ImVec2(-FLT_MIN, 0.0f)))
+        answerOpt = false;
 
     ImGui::SetItemDefaultFocus();
+
+    InfoMsgData answered;
+    if (answerOpt.has_value()) {
+        answered = std::move(m_InfoMsgData);
+        m_InfoMsgData = {};
+        ImGui::CloseCurrentPopup();
+    }
+
     ImGui::EndPopup();
+
+    if (answered.callback)
+        answered.callback(*answerOpt);
 }
 
 void Ui::drawErrorModal() {
@@ -293,6 +350,67 @@ void Ui::drawErrorModal() {
     ImGui::EndPopup();
 }
 
+void Ui::drawSearchPanel() {
+    if (!m_FileOpen || !m_SearchData.panelOpen)
+        return;
+
+    setNextWindowAtViewportCorner(ImVec2(1.0f, 1.0f), ImVec2(kFloatingWindowMargin, kFloatingWindowMargin), ImGuiCond_FirstUseEver);
+
+    bool stayOpen = true;
+    ImGui::Begin(
+        "Find###search", &stayOpen,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings
+    );
+
+    if (m_SearchData.focusRequested) {
+        m_SearchData.focusRequested = false;
+        ImGui::SetKeyboardFocusHere();
+    }
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * kSearchFieldWidthEm);
+    const bool enter = ImGui::InputTextWithHint(
+        "##needle", "Text to find", m_SearchData.needleBuf, IM_COUNTOF(m_SearchData.needleBuf),
+        ImGuiInputTextFlags_EnterReturnsTrue
+    );
+    if (ImGui::IsItemEdited())
+        m_TextView.setSearchNeedle(m_SearchData.needleBuf);
+    if (enter) {
+        ImGui::SetKeyboardFocusHere(-1); // revert focus
+        sendFindCommand(ImGui::GetIO().KeyShift);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##prev", ImGuiDir_Up))
+        sendFindCommand(true);
+    ImGui::SetItemTooltip("Previous (Shift+F3)");
+
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##next", ImGuiDir_Down))
+        sendFindCommand(false);
+    ImGui::SetItemTooltip("Next (F3)");
+
+    if (m_SearchData.running) {
+        const float progress = m_SearchData.progress.load(std::memory_order_relaxed);
+        ImGui::Text("Searching... %.0f%%", progress * 100 + 0.01f);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Cancel"))
+            execCommand(cmd::CancelFind());
+    }
+    else {
+        if (m_SearchData.resultOpt.has_value()) {
+            const bool value = *m_SearchData.resultOpt;
+            ImGui::TextUnformatted(value ? "Found" : "Not Found");
+        }
+        else {
+            ImGui::TextUnformatted(" "); // keeps the panel from resizing
+        }
+    }
+
+    ImGui::End();
+
+    if (!stayOpen)
+        closeSearchPanel();
+}
+
 void Ui::drawProgress() {
     const auto& windowBg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
     const auto& menuBg = ImGui::GetStyleColorVec4(ImGuiCol_MenuBarBg);
@@ -303,23 +421,18 @@ void Ui::drawProgress() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowTitleAlign, ImVec2(0.5f, 0.5f));
 
-    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    const auto& viewportMin = mainViewport->WorkPos;
-    const auto& viewportMax = viewportMin + mainViewport->WorkSize;
-
-    ImGui::SetNextWindowPos(ImVec2(viewportMax.x - 24.0f, viewportMin.y), 0, ImVec2(1.0f, 0.0f));
+    setNextWindowAtViewportCorner(ImVec2(1.0f, 0.0f), ImVec2(kFloatingWindowMargin, 0.0f), ImGuiCond_Always);
     ImGui::SetNextWindowCollapsed(false, ImGuiCond_Once);
 
     ImGui::Begin(
         "Loading tasks###progress", nullptr,
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize
-        | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav
+        | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
     );
     ImGui::PopStyleColor(4);
     ImGui::PopStyleVar(2);
 
-    static constexpr float width = 320.0f;
-    ImGui::Dummy(ImVec2(width, 0.0f));
+    ImGui::Dummy(ImVec2(kProgressBarWidth, 0.0f));
 
     int i = 0;
     char buf[64];
@@ -343,7 +456,7 @@ void Ui::drawProgress() {
             else
                 ImFormatString(buf, IM_COUNTOF(buf), "%s: cancelling...", progressData.name.c_str());
         }
-        ImGui::ProgressBar(fraction, ImVec2(width, 0.0f), buf);
+        ImGui::ProgressBar(fraction, ImVec2(kProgressBarWidth, 0.0f), buf);
 
         if (progressData.cancelClickCallback) {
             const float buttonSize = ImGui::GetFontSize();
@@ -372,19 +485,31 @@ void Ui::drawProgress() {
     ImGui::End();
 }
 
-void Ui::render() {
-    ImGui::Render();
-    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+void Ui::openSearchPanel() {
+    m_SearchData.panelOpen = true;
+    m_SearchData.focusRequested = true;
+    m_TextView.setSearchNeedle(m_SearchData.needleBuf);
 }
 
-void Ui::setFileOpened(TextView::Source source) {
-    m_TextView.reset(std::move(source));
-    m_FileOpen = true;
+void Ui::closeSearchPanel() {
+    m_SearchData.panelOpen = false;
+    setSearchIdle();
+    m_TextView.setSearchNeedle({});
+    execCommand(cmd::CancelFind());
 }
 
-void Ui::setFileClosed() {
-    m_TextView.reset();
-    m_FileOpen = false;
+void Ui::sendFindCommand(const bool backwards) {
+    if (m_SearchData.needleBuf[0] == '\0')
+        return;
+
+    m_TextView.setSearchNeedle(m_SearchData.needleBuf);
+
+    cmd::Find command;
+    command.needle = m_SearchData.needleBuf;
+    command.backwards = backwards;
+    command.fromLineIdx = m_TextView.getFirstWholeVisibleLineIdx();
+    command.continueFromCurrentMatch = m_TextView.isCurrentSearchMatchVisible();
+    execCommand(command);
 }
 
 void Ui::execCommand(const Command& command) const {
@@ -402,6 +527,24 @@ Ui::ProgressRAII::~ProgressRAII() {
 
 std::atomic<float>& Ui::ProgressRAII::getProgressTS() const {
     return m_Iterator->progress;
+}
+
+Ui::SearchProgressRAII::SearchProgressRAII(SearchData* searchDataPtr) : m_SearchDataPtr(searchDataPtr) {
+    m_SearchDataPtr->progress.store(0.0f, std::memory_order_relaxed);
+    m_SearchDataPtr->resultOpt.reset();
+    m_SearchDataPtr->running = true;
+}
+
+Ui::SearchProgressRAII::~SearchProgressRAII() {
+    m_SearchDataPtr->running = false;
+}
+
+std::atomic<float>& Ui::SearchProgressRAII::getProgressTS() const {
+    return m_SearchDataPtr->progress;
+}
+
+std::unique_ptr<Ui::SearchProgressRAII> Ui::beginSearch() {
+    return std::make_unique<SearchProgressRAII>(&m_SearchData);
 }
 
 void Ui::ProgressRAII::setCancelled() const {

@@ -1,5 +1,6 @@
 ﻿#include "Controller.h"
 #include "../utils/FileUtils.h"
+#include "file/FileReader.h"
 #include "file/FileWriter.h"
 #include "gen/TextGenerator.h"
 #include "indexer/LineIndexer.h"
@@ -20,6 +21,7 @@ void Controller::tick() {
     m_DownloadJob.checkFinished();
     m_GenJob.checkFinished();
     m_SaveJob.checkFinished();
+    m_SearchJob.checkFinished();
 }
 
 void Controller::process(const Command& command) {
@@ -65,6 +67,14 @@ void Controller::CommandVisitor::operator()(const cmd::SaveAs&) const {
 
 void Controller::CommandVisitor::operator()(const cmd::Close&) const {
     controller.closeImpl();
+}
+
+void Controller::CommandVisitor::operator()(const cmd::Find& cmd) const {
+    controller.findImpl(cmd);
+}
+
+void Controller::CommandVisitor::operator()(const cmd::CancelFind&) const {
+    controller.m_SearchJob.cancel();
 }
 
 std::string_view Controller::getTextDataImpl(
@@ -418,6 +428,82 @@ void Controller::onSaveJobFinished(std::optional<std::string> errorOpt, const bo
         m_Ui.showErrorMsg(std::move(*errorOpt));
 }
 
+void Controller::findImpl(cmd::Find cmd) {
+    if (!m_OpenJob.isAlive() || cmd.needle.empty())
+        return;
+
+    if (m_SearchJob.isAlive()) {
+        m_SearchJob.cancel([this, c = std::move(cmd)] () mutable { findImpl(std::move(c)); });
+        return;
+    }
+
+    const auto& indexer = *m_OpenJob.data().lineIndexerPtr;
+
+    search::Request request;
+    request.needle = std::move(cmd.needle);
+    request.backwards = cmd.backwards;
+    request.contentStartOffsetBytes = indexer.getContentStartOffsetBytes();
+    request.endOffsetBytes = indexer.getScannedBytes(); // searching during indexing covers what was indexed by now
+
+    if (cmd.continueFromCurrentMatch && m_CurrentMatchOffsetOpt.has_value()) {
+        request.startOffsetBytes = cmd.backwards ? *m_CurrentMatchOffsetOpt : *m_CurrentMatchOffsetOpt + 1;
+    }
+    else {
+        const uint64_t lineStartOffsetBytes = indexer.computeLineOffsetBytes(cmd.fromLineIdx);
+        request.startOffsetBytes = lineStartOffsetBytes == UINT64_MAX ? request.contentStartOffsetBytes : lineStartOffsetBytes;
+    }
+
+    std::string errorMsg;
+    auto reader = FileReader::open(m_OpenJob.data().path, search::kReadBufferSize, errorMsg);
+    if (!reader) {
+        m_Ui.showErrorMsg(std::move(errorMsg));
+        return;
+    }
+
+    SearchPayload payload;
+    payload.readerPtr = std::move(reader);
+    payload.request = std::move(request);
+    payload.progressPtr = m_Ui.beginSearch();
+
+    m_SearchJob.start(
+        std::move(payload), &Controller::searchJobRoutine,
+        [this] (std::optional<std::string> errorOpt, const bool wasCancelled) {
+            onSearchJobFinished(std::move(errorOpt), wasCancelled);
+        }
+    );
+}
+
+std::optional<std::string> Controller::searchJobRoutine(SearchPayload& d, const std::stop_token& st) {
+    return search::find(*d.readerPtr, st, d.progressPtr->getProgressTS(), d.request, d.result);
+}
+
+// ReSharper disable once CppPassValueParameterByConstReference
+void Controller::onSearchJobFinished(std::optional<std::string> errorOpt, const bool wasCancelled) {
+    if (!m_SearchJob.isAlive())
+        return;
+
+    const auto result = m_SearchJob.data().result;
+    m_SearchJob.clear();
+
+    if (wasCancelled || errorOpt.has_value()) {
+        m_Ui.setSearchIdle();
+        if (!wasCancelled && errorOpt.has_value())
+            m_Ui.showErrorMsg(std::move(*errorOpt));
+        return;
+    }
+
+    uint64_t colIdx = 0, lineIdx = 0;
+    if (!result.found || !m_OpenJob.isAlive() || !m_OpenJob.data().lineIndexerPtr->locate(result.offsetBytes, colIdx, lineIdx)) {
+        m_CurrentMatchOffsetOpt.reset();
+        m_Ui.setSearchResult(false);
+        return;
+    }
+
+    m_CurrentMatchOffsetOpt = result.offsetBytes;
+    m_Ui.setSearchResult(true);
+    m_Ui.showSearchMatch(colIdx, lineIdx);
+}
+
 void Controller::closeImpl(std::function<void()> deferredFunc) {
     if (!m_OpenJob.isAlive()) {
         if (deferredFunc)
@@ -433,6 +519,11 @@ void Controller::closeImpl(std::function<void()> deferredFunc) {
         return;
     }
 
+    if (m_SearchJob.isAlive()) {
+        m_SearchJob.cancel([this, def = std::move(deferredFunc)] { closeImpl(def); });
+        return;
+    }
+
     if (m_OpenJob.isRunning()) {
         // still indexing
         cancelJob(m_OpenJob, std::move(deferredFunc));
@@ -441,9 +532,10 @@ void Controller::closeImpl(std::function<void()> deferredFunc) {
 
     const bool wasReadingFromTmp = isReadingFromTmp();
 
+    m_CurrentMatchOffsetOpt.reset();
     m_Ui.setFileClosed();
     m_App.setWindowTitle(std::nullopt);
-    m_OpenJob.clear(); // TODO: freezing a bit. can we fix?
+    m_OpenJob.clear();
 
     if (wasReadingFromTmp)
         removeTmpFiles(true, false);

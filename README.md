@@ -2,7 +2,7 @@
 
 A Windows viewer for text files tens of gigabytes in size.
 
-A file is never loaded entirely into memory. With this solution, opening a 40 GB file requires 17 MB of memory in addition to the empty application (and almost all of that is a sparse line index). Scrolling, searching, and navigating through lines are just as fast for a 1 KB file as they are for a 40 GB file.
+A file is never loaded entirely into memory. With this solution, opening a 40 GB file requires ~9 MB of memory in addition to the empty application (and almost all of that is a sparse line index). Scrolling, searching, and navigating through lines are just as fast for a 1 KB file as they are for a 40 GB file.
 
 ## Prerequisites
 
@@ -114,15 +114,15 @@ The rule I've derived from this: **a mapping wins when you load significantly mo
 
 Process memory after indexing is fully complete:
 
-| State                         | Memory |
-|-------------------------------|---|
-| Running, file not open | 59.3 MB |
-| 838 KB file open              | 67.2 MB |
-| 40 GB file open               | **76.4 MB** |
+| State                         | Memory      |
+|-------------------------------|-------------|
+| Running, file not open | 11.8 MB     |
+| 838 KB file open              | 15.8 MB     |
+| 40 GB file open               | **20.6 MB** |
 
-A 50 000x increase in data size takes up 9 MB, of which 5.2 MB is the anchor table, and the rest is the mapping window and buffers. The constant 59 MB consists of Direct3D, the font atlas and ImGui itself (they do not depend on the file at all).
+A 50 000x increase in data size takes up ~5 MB. The constant 11 MB consists of Direct3D, the font atlas and ImGui itself (they do not depend on the file at all).
 
-Also: the peak working set of the scanning alone, excluding the graphics part, is **12.8 MB** for a full 40 GB file.
+Also: the peak working set of the scanning alone, excluding the graphics part, is **13.8 MB** for a full 40 GB file.
 
 ## Limitations
 

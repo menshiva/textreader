@@ -135,6 +135,8 @@ Also: the peak working set of the scanning alone, excluding the graphics part, i
 
 ## Dependencies and licenses
 
+TextReader itself is released under the [MIT License](LICENSE). The bundled and fetched components keep their own:
+
 | Component | License |
 |---|---|
 | [Dear ImGui](https://github.com/ocornut/imgui) | MIT |
